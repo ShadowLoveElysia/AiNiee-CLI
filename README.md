@@ -1,15 +1,3 @@
-### 1. 项目描述 (Repository Description)
-
-**Short Description:**
-> ⚡ An optimized, headless CLI for AiNiee powered by `uv`. Features intelligent format conversion, multi-profile config system, and stabilized TUI.
->
-> ⚡ 基于 `uv` 驱动的 AiNiee 优化版 CLI。提供智能化格式输入/转换、多配置文件系统及高度稳定的 TUI 界面，专为高效批处理设计。
-
----
-
-### 2. README.md
-
-```markdown
 # AiNiee CLI (Optimized Edition)
 
 <div align="center">
