@@ -714,7 +714,7 @@ class CLIMenu:
         plat_conf = options[sel]
         self.config.update({
             "target_platform": sel, 
-            "base_url": plat_conf.get("url"), 
+            "base_url": plat_conf.get("api_url"), 
             "model": plat_conf.get("models", [""])[0],
             "api_settings": {"translate": sel, "polish": sel}
         })
