@@ -25,7 +25,11 @@ This project introduces **`uv`**, a modern Python package manager, and implement
 
 ### ⚙️ Workflow & Configuration
 *   **Intelligent Format Input/Conversion**: An optimized input processing pipeline. Supports a fully automated closed-loop operation ("Identify -> Convert -> Translate -> Restore") for non-standard formats (e.g., .mobi/.azw3), significantly simplifying pre-processing steps.
-*   **Multi-Profile System (Profiles)**: Introduces a profile management system. You can create, clone, and switch between multiple configuration sets (e.g., separating settings for "Fast Translation" vs. "High-Quality Polishing"). All profiles are stored in isolation.
+*   **Multi-Profile System (Profiles)**: Introduces a profile management system. You can create, clone, and switch between multiple configuration sets (e.g., separating settings for "Fast Translation" vs. "High-Quality Polishing"). All profiles are stored in isolation.\n*   **Live Mission Control**: **[New]** Introduces a new TUI task status and control center, supporting:
+    *   **Dynamic Concurrency Adjustment**: Real-time increase or decrease of concurrent threads using `+` and `-` keys during task execution.
+    *   **API Key Hot-Swap**: Force API key rotation using the `K` key to handle specific API call limits.
+    *   **System Status Monitoring**: A bottom status bar that displays real-time system operational status (Normal/Fixing/Warning/Error) and dynamically changes the panel border color.
+    *   **Cost and Time Estimation**: Before task startup, automatically estimates total Token consumption, approximate cost for online APIs, and Estimated Time of Arrival (ETA), prominently displayed in the log pane (for reference only).
 *   **Visual Interactive Experience**: A modern TUI built on `Rich`, featuring real-time performance monitoring (RPM/TPM), split-screen logging, and a BIOS-like interactive settings menu.
 
 ---
@@ -57,9 +61,26 @@ cd AiNiee
 No need to manually create virtual environments or install pip dependencies. Simply run `uv run` to handle the environment automatically:
 
 ```bash
-# Automatically sync dependencies and start the CLI
+# Automatically sync dependencies and start the CLI (Interactive Menu)
 uv run ainiee_cli.py
 ```
+
+### 4. Command-Line Argument Launch (Non-Interactive CLI)
+**[New]** This project supports launching translation or export tasks directly via command-line arguments, suitable for script integration and automation.
+
+**Translation Task Example:**
+```bash
+uv run ainiee_cli.py translate "H:\\Novels\\MyBook.txt" -o "H:\\Novels\\MyBook_Output" -p MyProfile -s Japanese -t Chinese --resume --yes
+```
+**Argument Description:**
+*   `translate` / `polish` / `export`: Specifies the task type.
+*   `H:\\Novels\\MyBook.txt`: (Positional argument) Input file or folder path.
+*   `-o, --output`: Specifies the output path.
+*   `-p, --profile`: Specifies the configuration profile name (e.g., `Elysia`).
+*   `-s, --source`: Specifies the source language.
+*   `-t, --target`: Specifies the target language.
+*   `--resume`: Automatically resumes the task if a cache is detected.
+*   `--yes`: Non-interactive mode; automatically answers `yes` to all confirmation prompts.
 
 ---
 
