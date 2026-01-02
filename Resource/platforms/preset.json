@@ -1,4 +1,54 @@
 {
+    "pre_translation_data": {},
+    "post_translation_data": {},
+    "exclusion_list_data": [],
+    "auto_process_text_code_segment": false,
+    "pre_translation_switch": false,
+    "post_translation_switch": false,
+    "prompt_dictionary_switch": false,
+    "prompt_dictionary_data": [],
+    "exclusion_list_switch": false,
+    "characterization_switch": false,
+    "characterization_data": [],
+    "world_building_switch": false,
+    "world_building_content": "",
+    "writing_style_switch": false,
+    "writing_style_content": "",
+    "translation_example_switch": false,
+    "translation_example_data": [],
+    "few_shot_and_example_switch": false,
+    "enable_api_failover": false,
+    "backup_apis": [],
+    "api_failover_threshold": 3,
+    "user_thread_counts": 0,
+    "auto_set_output_path": false,
+    "request_timeout": 60,
+    "response_check_switch": {
+        "newline_character_count_check": true,
+        "return_to_original_text_check": true,
+        "residual_original_text_check": true,
+        "reply_format_check": true
+    },
+    "keep_original_encoding": true,
+    "translated_output_path": "",
+    "translation_project": "AutoType",
+    "enable_retry": true,
+    "retry_count": 3,
+    "round_limit": 3,
+    "enable_smart_round_limit": true,
+    "smart_round_limit_multiplier": 2,
+    "enable_fast_translate": false,
+    "enable_line_breaks": false,
+    "line_breaks_style": 0,
+    "response_conversion_toggle": true,
+    "opencc_preset": "s2twp.json",
+    "tokens_limit_switch": false,
+    "lines_limit": 20,
+    "pre_line_counts": 3,
+    "show_detailed_logs": false,
+    "recent_projects": [],
+    "label_output_path": "",
+    "polishing_output_path": "",
     "platforms": {
         "sakura": {
             "tag": "sakura",
@@ -542,5 +592,22 @@
                 "thinking_budget"
             ]
         }
-    }
+    },
+    "interface_language": "",
+    "enable_cache_backup": true,
+    "enable_auto_restore_ebook": true,
+    "enable_dry_run": false,
+    "source_language": "Japanese",
+    "target_language": "Chinese",
+    "target_platform": "sakura",
+    "base_url": "http://127.0.0.1:8080",
+    "model": "",
+    "api_settings": {
+        "translate": "sakura",
+        "polish": "sakura"
+    },
+    "label_input_path": "",
+    "interactive_mode": true,
+    "translation_prompt_selection": {},
+    "polishing_prompt_selection": {}
 }
