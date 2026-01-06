@@ -31,6 +31,10 @@ This project introduces **`uv`**, a modern Python package manager, and implement
     *   **System Status Monitoring**: A bottom status bar that displays real-time system operational status (Normal/Fixing/Warning/Error) and dynamically changes the panel border color.
     *   **Cost and Time Estimation**: Before task startup, automatically estimates total Token consumption, approximate cost for online APIs, and Estimated Time of Arrival (ETA), prominently displayed in the log pane (for reference only).
 *   **Visual Interactive Experience**: A modern TUI built on `Rich`, featuring real-time performance monitoring (RPM/TPM), split-screen logging, and a BIOS-like interactive settings menu.
+*   **[New] Plugin Architecture**:
+    *   Introduces a brand-new plugin system, allowing for safe and modular feature extensions without altering the core codebase.
+    *   **Built-in RAG Plugin**: Comes with an out-of-the-box RAG (Retrieval-Augmented Generation) Context Plugin. When enabled, it automatically retrieves historical translations to provide crucial context for long-form content, significantly improving terminological and stylistic consistency.
+    *   **Centralized Management**: Both the main CLI menu and the Web UI feature a dedicated "Plugin Management" page, allowing you to discover and toggle all available plugins with a single click.
 
 ---
 
@@ -124,6 +128,7 @@ Once launched, you can navigate the following features via the interactive menu:
 *   **Visual Dashboard**: Real-time charts showing RPM, TPM, and task progress.
 *   **Network Access**: Monitor your translation tasks remotely via LAN IP. You can also use tunneling tools (e.g., `frp`, `cloudflared`) for external network access.
 *   **Profile Management**: Create, rename, delete, or switch configuration profiles directly from the web UI.
+*   **[New] Plugin Center**: A dedicated plugin management page in the Web UI allows users to intuitively enable or disable advanced features like RAG through a card-based interface.
 *   **State Recovery**: Automatically synchronizes task status, logs, and chart history even after a page refresh.
 
 > **⚠️ Important Note**:
