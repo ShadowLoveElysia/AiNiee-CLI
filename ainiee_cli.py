@@ -319,6 +319,11 @@ class CLIMenu:
 
         self.plugin_manager = PluginManager()
         self.plugin_manager.load_plugins_from_directory(os.path.join(PROJECT_ROOT, "PluginScripts"))
+        
+        # 同步插件启用状态
+        if "plugin_enables" in self.root_config:
+            self.plugin_manager.update_plugins_enable(self.root_config["plugin_enables"])
+            
         self.file_reader, self.file_outputer, self.cache_manager = FileReader(), FileOutputer(), CacheManager()
         self.simple_executor = SimpleExecutor()
         self.task_executor = TaskExecutor(self.plugin_manager, self.cache_manager, self.file_reader, self.file_outputer)
@@ -710,8 +715,8 @@ class CLIMenu:
         while True:
             self.display_banner()
             table = Table(show_header=False, box=None)
-            menus = ["start_translation", "start_polishing", "export_only", "settings", "api_settings", "glossary", "profiles", "update", "start_web_server"]
-            colors = ["green", "green", "magenta", "blue", "blue", "yellow", "cyan", "dim", "bold magenta"]
+            menus = ["start_translation", "start_polishing", "export_only", "settings", "api_settings", "glossary", "plugin_settings", "profiles", "update", "start_web_server"]
+            colors = ["green", "green", "magenta", "blue", "blue", "yellow", "cyan", "cyan", "dim", "bold magenta"]
             
             for i, (m, c) in enumerate(zip(menus, colors)): 
                 label = i18n.get(f"menu_{m}")
@@ -730,7 +735,8 @@ class CLIMenu:
                 self.run_export_only, 
                 self.settings_menu, 
                 self.api_settings_menu, 
-                self.prompt_menu, 
+                self.prompt_menu,
+                self.plugin_settings_menu,
                 self.profiles_menu,
                 self.update_manager.start_update,
                 self.start_web_server
@@ -1286,7 +1292,7 @@ class CLIMenu:
             console.print(table); console.print(f"\n[dim]0. {i18n.get('menu_exit')}[/dim]")
             
             choice = IntPrompt.ask(i18n.get('prompt_select'), choices=[str(i) for i in range(10)], show_choices=False)
-            console.print()
+            console.print("\n")
             
             if choice == 0: break
             elif choice == 1: self.select_prompt_template("Translate", "translation_prompt_selection")
@@ -1298,6 +1304,57 @@ class CLIMenu:
             elif choice == 7: self.manage_feature_content("writing_style_switch", "writing_style_content", i18n.get("feature_writing_style_switch"), is_list=False)
             elif choice == 8: self.manage_feature_content("translation_example_switch", "translation_example_data", i18n.get("feature_translation_example_switch"), is_list=True)
             elif choice == 9: self.rules_profiles_menu()
+
+    def plugin_settings_menu(self):
+        while True:
+            self.display_banner()
+            console.print(Panel(f"[bold]{i18n.get('menu_plugin_settings')}[/bold]"))
+            
+            # 获取所有加载的插件
+            plugins = self.plugin_manager.get_plugins()
+            if not plugins:
+                console.print(f"[dim]{i18n.get('msg_no_plugins_found')}[/dim]")
+                Prompt.ask(f"\n{i18n.get('msg_press_enter')}")
+                break
+
+            # 获取当前启用状态
+            plugin_enables = self.root_config.get("plugin_enables", {})
+            
+            table = Table(show_header=True, show_lines=True)
+            table.add_column("ID", style="dim")
+            table.add_column(i18n.get("label_plugin_name"))
+            table.add_column(i18n.get("label_status"), style="cyan")
+            table.add_column(i18n.get("label_description"), ratio=1)
+
+            sorted_plugin_names = sorted(plugins.keys())
+            for i, name in enumerate(sorted_plugin_names, 1):
+                plugin = plugins[name]
+                # 优先使用配置中的状态，否则使用插件自带的默认状态
+                is_enabled = plugin_enables.get(name, plugin.default_enable)
+                status = "[green]ON[/]" if is_enabled else "[red]OFF[/]"
+                table.add_row(str(i), name, status, plugin.description)
+            
+            console.print(table)
+            console.print(f"\n[dim]0. {i18n.get('menu_back')}[/dim]")
+            
+            choice = IntPrompt.ask(f"\n{i18n.get('prompt_toggle_plugin')}", choices=[str(i) for i in range(len(sorted_plugin_names) + 1)], show_choices=False)
+
+            if choice == 0:
+                break
+            
+            name = sorted_plugin_names[choice - 1]
+            plugin = plugins[name]
+            current_state = plugin_enables.get(name, plugin.default_enable)
+            plugin_enables[name] = not current_state
+            
+            # 更新到配置并保存
+            self.root_config["plugin_enables"] = plugin_enables
+            self.save_config(save_root=True)
+            
+            # 同步到 PluginManager
+            self.plugin_manager.update_plugins_enable(plugin_enables)
+            console.print(f"[green]Plugin '{name}' {'enabled' if not current_state else 'disabled'}.[/green]")
+            time.sleep(0.5)
 
     def manage_text_rule(self, switch_key, data_key, title):
         while True:

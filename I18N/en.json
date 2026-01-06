@@ -239,6 +239,11 @@
         "option_cancel": "Cancel task",
         "err_resume_no_cache": "[bold red]Cannot resume: No cache file found.[/bold red]",
         "msg_archive_success": "[green]Old directory archived to: {}[/green]",
-        "msg_overwrite_confirm": "[bold red]WARNING: This will permanently delete '{}' and all its contents. This action cannot be undone. Are you sure you want to continue?[/bold red]"
+        "msg_overwrite_confirm": "[bold red]WARNING: This will permanently delete '{}' and all its contents. This action cannot be undone. Are you sure you want to continue?[/bold red]",
+        "menu_plugin_settings": "Plugin Management",
+        "msg_no_plugins_found": "No plugins were found.",
+        "prompt_toggle_plugin": "Enter ID to toggle plugin enable status",
+        "label_plugin_name": "Plugin Name",
+        "label_status": "Status",
+        "label_description": "Description"
     }
-    

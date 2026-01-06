@@ -61,26 +61,40 @@ class AutoTypeWriter(BaseBilingualWriter, BaseTranslatedWriter):
     def write_bilingual_file(
         self, translation_file_path: Path, cache_file: CacheFile,
         source_file_path: Path = None,
+        task_config=None
     ):
         self._write_translation_file(
-            translation_file_path, cache_file, source_file_path, BaseTranslationWriter.TranslationMode.BILINGUAL
+            translation_file_path, cache_file, source_file_path, BaseTranslationWriter.TranslationMode.BILINGUAL, task_config
         )
 
     def write_translated_file(
         self, translation_file_path: Path, cache_file: CacheFile,
         source_file_path: Path = None,
+        task_config=None
     ):
         self._write_translation_file(
-            translation_file_path, cache_file, source_file_path, BaseTranslationWriter.TranslationMode.TRANSLATED
+            translation_file_path, cache_file, source_file_path, BaseTranslationWriter.TranslationMode.TRANSLATED, task_config
         )
 
-    def _write_translation_file(self, translation_file_path: str, cache_file: CacheFile, source_file_path:str, pre_write_metadata:dict):
-
-        if self.specific_writer:
-            self.specific_writer._write_translation_file(translation_file_path, cache_file, source_file_path, pre_write_metadata)
-        else:
-            # 如果没有找到特定的写入器，则调用一个通用或默认的方法
-            write_translation_file(translation_file_path, cache_file, source_file_path)
+    def _write_translation_file(
+        self, translation_file_path: Path, cache_file: CacheFile,
+        source_file_path: Path,
+        translation_mode: BaseTranslationWriter.TranslationMode,
+        task_config=None
+    ):
+        file_project_type = cache_file.file_project_type
+        if file_project_type not in self._writers:
+            return
+        writer = self._writers[file_project_type]
+        if writer.can_write(translation_mode):
+            write_method_name = translation_mode.write_method
+            write_translation_file = getattr(writer, write_method_name)
+            if file_project_type not in self._active_writers:
+                writer.__enter__()
+                self._active_writers.add(file_project_type)
+            
+            # 传递 task_config
+            write_translation_file(translation_file_path, cache_file, source_file_path, task_config=task_config)
 
     def on_write_bilingual(
         self, translation_file_path: Path, cache_file: CacheFile,

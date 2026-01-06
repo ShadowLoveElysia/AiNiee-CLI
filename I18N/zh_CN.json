@@ -174,7 +174,7 @@
     "label_est_cost": "参考费用 (仅供参考)",
     "label_est_time": "预估完成时间",
     "msg_ref_only": "注意：计算结果仅供参考，实际 Token 数以服务商统计为准。",
-    "label_shortcuts": "[dim]快捷键: [P] 暂停 | [R] 恢复 | [Q] 停止 | [-/+] 线程 | [K] 切换密钥[/dim]",
+    "label_shortcuts": "[dim]快捷键: [P]暂停 [R]恢复 [Q]停止 [V]日志 [N]跳过文件 [-/+]线程 [[]/[]]分割 [K]换Key[/dim]",
     "label_status_normal": "● 系统运行正常",
     "label_status_fixing": "◐ 故障更正中 (正在切换密钥/原地重试)",
     "label_status_warning": "◑ 网络波动，正在尝试恢复",
@@ -240,6 +240,11 @@
         "option_cancel": "取消任务",
         "err_resume_no_cache": "[bold red]无法断点续传：未找到缓存文件。[/bold red]",
         "msg_archive_success": "[green]旧目录已归档至: {}[/green]",
-        "msg_overwrite_confirm": "[bold red]警告：此操作将永久删除 '{}' 及其所有内容，无法撤销。您确定要继续吗？[/bold red]"
+        "msg_overwrite_confirm": "[bold red]警告：此操作将永久删除 '{}' 及其所有内容，无法撤销。您确定要继续吗？[/bold red]",
+        "menu_plugin_settings": "插件功能管理",
+        "msg_no_plugins_found": "未发现已加载的插件。",
+        "prompt_toggle_plugin": "输入ID切换插件启用状态",
+        "label_plugin_name": "插件名称",
+        "label_status": "状态",
+        "label_description": "功能描述"
     }
-    

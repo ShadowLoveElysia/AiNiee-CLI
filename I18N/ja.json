@@ -231,5 +231,11 @@
         "option_cancel": "タスクをキャンセル",
         "err_resume_no_cache": "[bold red]再開できません：キャッシュファイルが見つかりません。[/bold red]",
         "msg_archive_success": "[green]古いディレクトリを {} にアーカイブしました[/green]",
-        "msg_overwrite_confirm": "[bold red]警告：これにより '{}' とそのすべての内容が永久に削除されます。この操作は元に戻せません。続行しますか？[/bold red]"
-    }    
+        "msg_overwrite_confirm": "[bold red]警告：これにより '{}' とそのすべての内容が永久に削除されます。この操作は元に戻せません。続行しますか？[/bold red]",
+        "menu_plugin_settings": "プラグイン管理",
+        "msg_no_plugins_found": "プラグインが見つかりません。",
+        "prompt_toggle_plugin": "インデックスを入力してプラグインの有効/無効を切り替えます",
+        "label_plugin_name": "プラグイン名",
+        "label_status": "状態",
+        "label_description": "説明"
+    }

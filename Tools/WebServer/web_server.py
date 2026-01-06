@@ -343,6 +343,10 @@ class TranslationExampleItem(BaseModel):
 class StringContent(BaseModel):
     content: str
 
+class PluginEnableRequest(BaseModel):
+    name: str
+    enabled: bool
+
 class DeleteFileRequest(BaseModel):
     files: List[str]
 
@@ -650,6 +654,64 @@ async def get_translation_example():
 async def save_translation_example(items: List[TranslationExampleItem]):
     save_rule_generic("translation_example_data", [item.dict() for item in items])
     return {"message": "Translation examples saved."}
+
+# --- Plugin Management Endpoints ---
+
+@app.get("/api/plugins")
+async def get_plugins():
+    """
+    Returns a list of all loaded plugins and their enable status.
+    """
+    try:
+        # We need an instance of PluginManager to get the loaded plugins
+        from ModuleFolders.Base.PluginManager import PluginManager
+        pm = PluginManager()
+        pm.load_plugins_from_directory(os.path.join(PROJECT_ROOT, "PluginScripts"))
+        
+        plugins = pm.get_plugins()
+        
+        # Load enable status from root config
+        root_config = {}
+        if os.path.exists(ROOT_CONFIG_FILE):
+            with open(ROOT_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                root_config = json.load(f)
+        
+        plugin_enables = root_config.get("plugin_enables", {})
+        
+        result = []
+        for name, plugin in plugins.items():
+            result.append({
+                "name": name,
+                "description": plugin.description,
+                "enabled": plugin_enables.get(name, plugin.default_enable),
+                "default_enable": plugin.default_enable
+            })
+            
+        return sorted(result, key=lambda x: x["name"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get plugins: {e}")
+
+@app.post("/api/plugins/toggle")
+async def toggle_plugin(request: PluginEnableRequest):
+    """
+    Toggles a plugin's enable status and saves it to root config.
+    """
+    try:
+        root_config = {}
+        if os.path.exists(ROOT_CONFIG_FILE):
+            with open(ROOT_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                root_config = json.load(f)
+        
+        plugin_enables = root_config.get("plugin_enables", {})
+        plugin_enables[request.name] = request.enabled
+        root_config["plugin_enables"] = plugin_enables
+        
+        with open(ROOT_CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(root_config, f, indent=4, ensure_ascii=False)
+            
+        return {"message": f"Plugin '{request.name}' {'enabled' if request.enabled else 'disabled'}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to toggle plugin: {e}")
 
 @app.get("/api/profiles", response_model=List[str])
 async def get_profiles():

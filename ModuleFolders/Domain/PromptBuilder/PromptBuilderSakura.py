@@ -108,7 +108,7 @@ class PromptBuilderSakura(Base):
         return dict_lines_str
 
     # 生成信息结构 - Sakura
-    def generate_prompt_sakura(config,  source_text_dict: dict, previous_text_list: list[str], source_lang) -> tuple[list[dict], str, list[str]]:
+    def generate_prompt_sakura(config,  source_text_dict: dict, previous_text_list: list[str], source_lang, rag_context: str = "") -> tuple[list[dict], str, list[str]]:
         # 储存指令
         messages = []
         # 储存额外日志
@@ -135,6 +135,11 @@ class PromptBuilderSakura(Base):
                 "根据以下术语表（可以为空）：\n" + glossary
                 + "\n" + "将下面的日文文本根据对应关系和备注翻译成中文：\n" + source_text
             )
+
+        # 如果有 RAG 上下文，注入到主要提示词中
+        if rag_context:
+            user_prompt = f"### 相关历史上下文（供参考）：\n{rag_context}\n\n" + user_prompt
+            extra_log.append(f"RAG Context added:\n{rag_context}")
 
         # 构建指令列表
         messages.append(

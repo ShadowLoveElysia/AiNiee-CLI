@@ -91,22 +91,29 @@ class FileOutputer:
         :param output_config: 输出配置
         """
         
-        # 根据输入路径的类型（文件或目录）选择不同的写入策略
-        if os.path.isdir(input_path):
-            writer = DirectoryWriter(output_path, output_config, self.plugin_manager)
-            writer.write_translation_directory(cache_data, input_path, task_config)
-        elif os.path.isfile(input_path):
-            # For single file, we also use a writer, but call it directly
-            # The AutoTypeWriter is suitable here as it can handle any file type.
-            writer = AutoTypeWriter(writer_factories=self.writer_factory_dict.values())
+        project_type = cache_data.project_type
+        if project_type not in self.writer_factory_dict:
+            # 如果找不到对应的写入器，尝试使用自动判断
+            project_type = AutoTypeWriter.get_project_type()
             
-            # Ensure the output directory exists
-            output_file_path = os.path.join(output_path, os.path.basename(input_path))
-            os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
-            
-            writer.write_translated_file(output_file_path, cache_data.get_first_file(), input_path, task_config)
+        if project_type in self.writer_factory_dict:
+            writer_init_params = self._get_writer_init_params(
+                project_type, Path(output_path), Path(input_path), output_config
+            )
+            # 绑定配置，使工厂变成无参
+            writer_factory = partial(self.writer_factory_dict[project_type], **writer_init_params)
+
+            # 处理输入路径
+            input_path_obj = Path(input_path)
+            if input_path_obj.is_file():
+                source_directory = input_path_obj.parent
+            else:
+                source_directory = input_path_obj
+
+            writer = DirectoryWriter(writer_factory)
+            writer.write_translation_directory(cache_data, source_directory, Path(output_path), task_config)
         else:
-            raise ValueError("输入路径既不是文件也不是目录")
+            raise ValueError(f"未找到对应的项目写入器: {project_type}")
 
     def _get_writer_init_params(self, project_type, output_path: Path, input_path: Path, config: dict):
         output_config = self._get_writer_default_config(project_type, output_path, input_path, config)

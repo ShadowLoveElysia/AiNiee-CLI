@@ -75,6 +75,15 @@ class TranslatorTask(Base):
         # 触发插件事件 - 文本正规化
         self.plugin_manager.broadcast_event("normalize_text", self.config, self.source_text_dict)
 
+        # 触发插件事件 - RAG 上下文构建
+        rag_context_data = {
+            "source_text_dict": self.source_text_dict,
+            "previous_text_list": self.previous_text_list,
+            "rag_context": "" # 插件可以填充此字段
+        }
+        self.plugin_manager.broadcast_event("build_rag_context", self.config, rag_context_data)
+        self.rag_context = rag_context_data.get("rag_context", "")
+
         # 各种替换步骤，译前替换，提取首尾与占位中间代码
         self.source_text_dict, self.prefix_codes, self.suffix_codes, self.placeholder_order, self.affix_whitespace_storage = \
             self.text_processor.replace_all(
@@ -90,6 +99,7 @@ class TranslatorTask(Base):
                 self.source_text_dict,
                 self.previous_text_list, 
                 self.source_lang, 
+                self.rag_context
             )
         elif target_platform == "LocalLLM":
             self.messages, self.system_prompt, self.extra_log = PromptBuilderLocal.generate_prompt_LocalLLM(
@@ -97,6 +107,7 @@ class TranslatorTask(Base):
                 self.source_text_dict,
                 self.previous_text_list,
                 self.source_lang,
+                self.rag_context
             )
         else:
             self.messages, self.system_prompt, self.extra_log = PromptBuilder.generate_prompt(
@@ -104,6 +115,7 @@ class TranslatorTask(Base):
                 self.source_text_dict,
                 self.previous_text_list,
                 self.source_lang,
+                self.rag_context
             )
 
         # 预估 Token 消费
