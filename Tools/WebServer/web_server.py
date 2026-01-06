@@ -156,20 +156,10 @@ class TaskManager:
             if payload.get("tokens") is not None:
                 cli_args.extend(["--tokens", str(payload["tokens"])])
             
-            # Determine Profile: Payload > Active Config > Default
-            profile_arg = payload.get("profile")
-            if not profile_arg:
-                try:
-                    if os.path.exists(ROOT_CONFIG_FILE):
-                        with open(ROOT_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                            rc = json.load(f)
-                            profile_arg = rc.get("active_profile", "default")
-                    else:
-                        profile_arg = "default"
-                except:
-                    profile_arg = "default"
-            
-            cli_args.extend(["--profile", profile_arg])
+            if payload.get("profile"):
+                cli_args.extend(["--profile", payload["profile"]])
+            if payload.get("rules_profile"):
+                cli_args.extend(["--rules-profile", payload["rules_profile"]])
             
             # Note: other keys like 'threads' are in the payload but not used here
             # because ainiee_cli.py doesn't have CLI args for them. They are
@@ -305,11 +295,15 @@ class AppConfig(BaseModel):
     source_language: Optional[str] = None
     target_language: Optional[str] = None
     actual_thread_counts: Optional[int] = None
+    temp_file_limit: Optional[int] = 10
     # Add other fields from your config...
     class Config:
         extra = 'allow' # Allow extra fields not defined here
 
 class ProfileSwitchRequest(BaseModel):
+    profile: str
+
+class RulesProfileSwitchRequest(BaseModel):
     profile: str
 
 class ProfileCreateRequest(BaseModel):
@@ -332,6 +326,25 @@ class ExclusionItem(BaseModel):
     markers: str
     info: Optional[str] = None
     regex: Optional[str] = None
+
+class CharacterizationItem(BaseModel):
+    original_name: str
+    translated_name: str
+    gender: Optional[str] = ""
+    age: Optional[str] = ""
+    personality: Optional[str] = ""
+    speech_style: Optional[str] = ""
+    additional_info: Optional[str] = ""
+
+class TranslationExampleItem(BaseModel):
+    src: str
+    dst: str
+
+class StringContent(BaseModel):
+    content: str
+
+class DeleteFileRequest(BaseModel):
+    files: List[str]
 
 class TaskPayload(BaseModel):
     """Pydantic model that EXACTLY matches the frontend's TaskPayload interface in types.ts"""
@@ -370,6 +383,7 @@ app = FastAPI(title="AiNiee CLI Backend API")
 RESOURCE_PATH = os.path.join(PROJECT_ROOT, "Resource")
 VERSION_FILE = os.path.join(RESOURCE_PATH, "Version", "version.json")
 PROFILES_PATH = os.path.join(RESOURCE_PATH, "profiles")
+RULES_PROFILES_PATH = os.path.join(RESOURCE_PATH, "rules_profiles")
 ROOT_CONFIG_FILE = os.path.join(RESOURCE_PATH, "config.json")
 WEB_SERVER_PATH = os.path.join(PROJECT_ROOT, "Tools", "WebServer")
 
@@ -398,6 +412,53 @@ def get_active_profile_path() -> str:
     profile_name = config.get("active_profile", "default")
     return os.path.join(PROFILES_PATH, f"{profile_name}.json")
 
+def get_active_rules_profile_path() -> str:
+    """Gets the full path to the active rules profile JSON file."""
+    mode, root_config = get_config_mode()
+    rules_profile = root_config.get("active_rules_profile", "default")
+    os.makedirs(RULES_PROFILES_PATH, exist_ok=True)
+    return os.path.join(RULES_PROFILES_PATH, f"{rules_profile}.json")
+
+def save_rule_generic(key: str, value: Any):
+    """Helper to save a specific rule key to the active RULES profile."""
+    global _config_cache
+    target_path = get_active_rules_profile_path()
+    try:
+        current_rules = {}
+        if os.path.exists(target_path):
+            try:
+                with open(target_path, 'r', encoding='utf-8-sig') as f:
+                    current_rules = json.load(f)
+            except: pass
+        current_rules[key] = value
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        with open(target_path, 'w', encoding='utf-8') as f:
+            json.dump(current_rules, f, indent=4, ensure_ascii=False)
+        _config_cache.clear()
+        return True
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save rule {key}: {e}")
+
+def save_config_generic(key: str, value: Any):
+    """Helper to save a specific key to the active SETTINGS profile."""
+    global _config_cache
+    target_path = get_active_profile_path()
+    try:
+        current_config = {}
+        if os.path.exists(target_path):
+            try:
+                with open(target_path, 'r', encoding='utf-8-sig') as f:
+                    current_config = json.load(f)
+            except: pass
+        current_config[key] = value
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        with open(target_path, 'w', encoding='utf-8') as f:
+            json.dump(current_config, f, indent=4, ensure_ascii=False)
+        _config_cache.clear()
+        return True
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save setting {key}: {e}")
+
 # --- API Endpoints ---
 
 @app.get("/api/version")
@@ -407,84 +468,126 @@ async def get_version():
         return _version_cache["version"]
 
     if not os.path.exists(VERSION_FILE):
-        raise HTTPException(status_code=404, detail="version.json not found")
-    with open(VERSION_FILE, 'r', encoding='utf-8') as f:
-        version_data = json.load(f)
-        _version_cache["version"] = version_data
-        return version_data
-
-@app.get("/api/config")
-async def get_config():
-    """
-    Returns the content of the active configuration.
-    Handles both legacy (single config.json) and profile-based configs.
-    Ensures critical keys expected by the frontend are present, and caches results.
-    """
-    global _config_cache
-    
-    mode, config_data_from_root = get_config_mode()
-    current_profile_name = config_data_from_root.get("active_profile", "legacy" if mode == "legacy" else "default")
-
-    if current_profile_name in _config_cache:
-        return _config_cache[current_profile_name]
-
-    if mode == "legacy":
-        loaded_config = config_data_from_root # In legacy mode, root config is the full config
-    else: # profile mode
-        profile_path = get_active_profile_path()
-        if not os.path.exists(profile_path):
-            loaded_config = {} # Return empty if profile file not found
-        else:
-            try:
-                with open(profile_path, 'r', encoding='utf-8-sig') as f:
-                    loaded_config = json.load(f)
-            except (IOError, json.JSONDecodeError):
-                loaded_config = {} # Return empty on read error
-
-    # --- Frontend Compatibility Patch ---
-    # The frontend expects 'response_check_switch' to exist. If it doesn't,
-    # the settings page will crash on render. We add a default here.
-    loaded_config["active_profile"] = current_profile_name
-    
-    if "response_check_switch" not in loaded_config:
-        loaded_config["response_check_switch"] = {
-            "newline_character_count_check": False,
-            "return_to_original_text_check": False,
-            "residual_original_text_check": False,
-            "reply_format_check": False
-        }
-    
-    _config_cache[current_profile_name] = loaded_config
-    return loaded_config
-
+        # Fallback to a default if file is missing
+        return {"version": "V0.0.0 (Version file not found)"}
+        
+    try:
+        with open(VERSION_FILE, 'r', encoding='utf-8') as f:
+            version_data = json.load(f)
+            _version_cache["version"] = version_data
+            return version_data
+    except:
+        return {"version": "V0.0.0 (Read Error)"}
 
 @app.post("/api/config")
 async def save_config(config: AppConfig):
     """
-    Saves the provided JSON to the active configuration file.
-    Handles both legacy and profile-based configs, and invalidates cache.
+    Saves the provided JSON to the active configuration file (settings only).
     """
-    global _config_cache, _profiles_cache # Need to clear these caches
-    
+    global _config_cache
     target_path = get_active_profile_path()
-    mode, config_data_from_root = get_config_mode()
-    current_profile_name = config_data_from_root.get("active_profile", "legacy" if mode == "legacy" else "default")
-
+    
+    # Identify keys that belong to rules (to exclude them from settings save)
+    rule_keys = [
+        "prompt_dictionary_data", "exclusion_list_data", "characterization_data",
+        "world_building_content", "writing_style_content", "translation_example_data"
+    ]
+    
     try:
+        config_dict = config.model_dump(exclude_unset=True) if hasattr(config, 'model_dump') else config.dict(exclude_unset=True)
+        
+        # Filter out rule data to prevent corruption/desync
+        settings_only = {k: v for k, v in config_dict.items() if k not in rule_keys}
+
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
         with open(target_path, 'w', encoding='utf-8') as f:
-            config_dict = config.model_dump(exclude_unset=True) if hasattr(config, 'model_dump') else config.dict(exclude_unset=True)
-            json.dump(config_dict, f, indent=4, ensure_ascii=False)
+            json.dump(settings_only, f, indent=4, ensure_ascii=False)
         
-        # Invalidate the cache for this specific profile or the legacy config
-        if current_profile_name in _config_cache:
-            del _config_cache[current_profile_name]
-        # Also clear profiles cache as new profiles might have been created/renamed/deleted implicitly
-        _profiles_cache = None
-
-        return {"message": "Config saved successfully."}
+        _config_cache.clear()
+        return {"message": "Settings saved successfully."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to write to config file: {e}")
+
+@app.get("/api/config")
+async def get_config():
+    """
+    Returns the content of the active configuration merged with active rules.
+    """
+    global _config_cache
+    
+    mode, root_config = get_config_mode()
+    current_profile_name = root_config.get("active_profile", "default")
+    current_rules_name = root_config.get("active_rules_profile", "default")
+
+    cache_key = f"{current_profile_name}_{current_rules_name}"
+    if cache_key in _config_cache:
+        return _config_cache[cache_key]
+
+    # 1. Load Base Config
+    profile_path = get_active_profile_path()
+    loaded_config = {}
+    if os.path.exists(profile_path):
+        try:
+            with open(profile_path, 'r', encoding='utf-8-sig') as f:
+                loaded_config = json.load(f)
+        except: pass
+
+    # 2. Load Rules Config
+    rules_path = get_active_rules_profile_path()
+    rules_config = {}
+    if os.path.exists(rules_path):
+        try:
+            with open(rules_path, 'r', encoding='utf-8-sig') as f:
+                rules_config = json.load(f)
+        except: pass
+
+    # 3. Merge (Rules override Profile if keys overlap, though they shouldn't in the new architecture)
+    # Fields to pull from rules:
+    rule_keys = [
+        "prompt_dictionary_data", "exclusion_list_data", "characterization_data",
+        "world_building_content", "writing_style_content", "translation_example_data"
+    ]
+    for k in rule_keys:
+        if k in rules_config:
+            loaded_config[k] = rules_config[k]
+
+    # Meta
+    loaded_config["active_profile"] = current_profile_name
+    loaded_config["active_rules_profile"] = current_rules_name
+    
+    if "response_check_switch" not in loaded_config:
+        loaded_config["response_check_switch"] = {
+            "newline_character_count_check": False, "return_to_original_text_check": False,
+            "residual_original_text_check": False, "reply_format_check": False
+        }
+    
+    _config_cache[cache_key] = loaded_config
+    return loaded_config
+
+def save_config_generic(key: str, value: Any):
+    """Helper to save a specific key to the active profile."""
+    global _config_cache
+    target_path = get_active_profile_path()
+    try:
+        # Load existing config to preserve other fields
+        current_config = {}
+        if os.path.exists(target_path):
+            try:
+                with open(target_path, 'r', encoding='utf-8-sig') as f:
+                    current_config = json.load(f)
+            except:
+                pass # If file is corrupt, we might overwrite, or maybe backup first? For now, we proceed.
+        
+        current_config[key] = value
+        
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        with open(target_path, 'w', encoding='utf-8') as f:
+            json.dump(current_config, f, indent=4, ensure_ascii=False)
+            
+        _config_cache.clear()
+        return True
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save {key}: {e}")
 
 @app.get("/api/glossary", response_model=List[GlossaryItem])
 async def get_glossary():
@@ -493,25 +596,8 @@ async def get_glossary():
 
 @app.post("/api/glossary")
 async def save_glossary(items: List[GlossaryItem]):
-    global _config_cache
-    target_path = get_active_profile_path()
-    
-    try:
-        # Load current config
-        with open(target_path, 'r', encoding='utf-8-sig') as f:
-            current_config = json.load(f)
-        
-        # Update glossary
-        current_config["prompt_dictionary_data"] = [item.dict() for item in items]
-        
-        # Save back
-        with open(target_path, 'w', encoding='utf-8') as f:
-            json.dump(current_config, f, indent=4, ensure_ascii=False)
-            
-        _config_cache.clear() # Invalidate cache
-        return {"message": "Glossary saved successfully."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save glossary: {e}")
+    save_rule_generic("prompt_dictionary_data", [item.dict() for item in items])
+    return {"message": "Glossary saved successfully."}
 
 @app.get("/api/exclusion", response_model=List[ExclusionItem])
 async def get_exclusion():
@@ -520,25 +606,50 @@ async def get_exclusion():
 
 @app.post("/api/exclusion")
 async def save_exclusion(items: List[ExclusionItem]):
-    global _config_cache
-    target_path = get_active_profile_path()
-    
-    try:
-        # Load current config
-        with open(target_path, 'r', encoding='utf-8-sig') as f:
-            current_config = json.load(f)
-        
-        # Update exclusion list
-        current_config["exclusion_list_data"] = [item.dict() for item in items]
-        
-        # Save back
-        with open(target_path, 'w', encoding='utf-8') as f:
-            json.dump(current_config, f, indent=4, ensure_ascii=False)
-            
-        _config_cache.clear() # Invalidate cache
-        return {"message": "Exclusion list saved successfully."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save exclusion list: {e}")
+    save_rule_generic("exclusion_list_data", [item.dict() for item in items])
+    return {"message": "Exclusion list saved successfully."}
+
+# --- New Features Endpoints ---
+
+@app.get("/api/characterization", response_model=List[CharacterizationItem])
+async def get_characterization():
+    config = await get_config()
+    return config.get("characterization_data", [])
+
+@app.post("/api/characterization")
+async def save_characterization(items: List[CharacterizationItem]):
+    save_rule_generic("characterization_data", [item.dict() for item in items])
+    return {"message": "Characterization saved."}
+
+@app.get("/api/world_building", response_model=StringContent)
+async def get_world_building():
+    config = await get_config()
+    return {"content": config.get("world_building_content", "")}
+
+@app.post("/api/world_building")
+async def save_world_building(data: StringContent):
+    save_rule_generic("world_building_content", data.content)
+    return {"message": "World building saved."}
+
+@app.get("/api/writing_style", response_model=StringContent)
+async def get_writing_style():
+    config = await get_config()
+    return {"content": config.get("writing_style_content", "")}
+
+@app.post("/api/writing_style")
+async def save_writing_style(data: StringContent):
+    save_rule_generic("writing_style_content", data.content)
+    return {"message": "Writing style saved."}
+
+@app.get("/api/translation_example", response_model=List[TranslationExampleItem])
+async def get_translation_example():
+    config = await get_config()
+    return config.get("translation_example_data", [])
+
+@app.post("/api/translation_example")
+async def save_translation_example(items: List[TranslationExampleItem]):
+    save_rule_generic("translation_example_data", [item.dict() for item in items])
+    return {"message": "Translation examples saved."}
 
 @app.get("/api/profiles", response_model=List[str])
 async def get_profiles():
@@ -557,6 +668,37 @@ async def get_profiles():
     profiles = [f.replace(".json", "") for f in os.listdir(PROFILES_PATH) if f.endswith(".json")]
     _profiles_cache = profiles
     return profiles
+
+@app.get("/api/rules_profiles", response_model=List[str])
+async def get_rules_profiles():
+    if not os.path.isdir(RULES_PROFILES_PATH):
+        os.makedirs(RULES_PROFILES_PATH, exist_ok=True)
+        return ["default"]
+    profiles = [f.replace(".json", "") for f in os.listdir(RULES_PROFILES_PATH) if f.endswith(".json")]
+    return profiles or ["default"]
+
+@app.post("/api/rules_profiles/switch")
+async def switch_rules_profile(request: RulesProfileSwitchRequest):
+    global _config_cache
+    profile_name = request.profile
+    profile_path = os.path.join(RULES_PROFILES_PATH, f"{profile_name}.json")
+    
+    if not os.path.exists(profile_path):
+        # Create default if switching to something that doesn't exist? No, error.
+        raise HTTPException(status_code=404, detail="Rules profile not found")
+    
+    try:
+        root_config = {}
+        if os.path.exists(ROOT_CONFIG_FILE):
+            with open(ROOT_CONFIG_FILE, 'r', encoding='utf-8') as f: root_config = json.load(f)
+        root_config["active_rules_profile"] = profile_name
+        with open(ROOT_CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(root_config, f, indent=4, ensure_ascii=False)
+        
+        _config_cache.clear()
+        return await get_config()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/profiles/switch")
 async def switch_profile(request: ProfileSwitchRequest):
@@ -768,23 +910,78 @@ async def get_task_status():
 # --- File Management Endpoints ---
 
 @app.post("/api/files/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), policy: str = "default"):
     """
-    Uploads a file to the project's 'updatetemp' directory.
+    Uploads a file to the project's 'updatetemp' directory with limit enforcement.
+    policy: 'default' | 'buffer' | 'overwrite'
     """
     try:
         os.makedirs(UPDATETEMP_PATH, exist_ok=True)
-        file_location = os.path.join(UPDATETEMP_PATH, file.filename)
         
-        # Security check: Ensure file stays within update temp (basic path traversal check)
+        # 1. Get current sorted files
+        files = []
+        for f in os.listdir(UPDATETEMP_PATH):
+            fp = os.path.join(UPDATETEMP_PATH, f)
+            if os.path.isfile(fp):
+                files.append((fp, os.path.getmtime(fp)))
+        files.sort(key=lambda x: x[1]) # Oldest first
+        
+        # 2. Get Limit
+        config = await get_config()
+        limit = config.get("temp_file_limit", 10)
+        count = len(files)
+        
+        # 3. Logic
+        if count < limit:
+            pass # Safe to upload
+        
+        elif count == limit:
+            if policy == "default":
+                return {
+                    "status": "limit_reached", 
+                    "limit": limit,
+                    "oldest": os.path.basename(files[0][0])
+                }
+            elif policy == "overwrite":
+                try: os.remove(files[0][0])
+                except: pass
+            elif policy == "buffer":
+                pass # Allow +1
+        
+        elif count >= limit + 1:
+            # Force delete oldest to bring back to limit (or limit+1 if we allow swap?)
+            # Requirement: "Only to the 12th file... prompt user 'Earliest has been deleted'"
+            # If current is 11 (limit+1), adding 12th means we MUST delete 1st.
+            # So we delete oldest, and return a warning flag.
+            try: os.remove(files[0][0])
+            except: pass
+            
+            # Now count is back to limit (10). Wait, if we had 11, deleting 1 makes 10.
+            # Then we save new file -> 11.
+            # So we are effectively rotating at limit+1.
+            return {
+                "status": "forced_delete",
+                "limit": limit,
+                "deleted": os.path.basename(files[0][0]),
+                "path": "" # Will be filled after save
+            }
+
+        # 4. Save File
+        file_location = os.path.join(UPDATETEMP_PATH, file.filename)
+        # Security check
         if not os.path.abspath(file_location).startswith(os.path.abspath(UPDATETEMP_PATH)):
              raise HTTPException(status_code=400, detail="Invalid file path")
 
         with open(file_location, "wb+") as file_object:
             file_object.write(await file.read())
             
-        return {"info": f"file '{file.filename}' saved at '{file_location}'", "path": file_location}
+        return {"info": f"file '{file.filename}' saved", "path": file_location}
+
     except Exception as e:
+        # If it was our custom return, don't wrap it in 500
+        if isinstance(e, HTTPException): raise e
+        # If the return was a dict (status logic above), fastapi handles it? 
+        # No, async def returns JSON directly. 
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {e}")
 
 @app.get("/api/files/temp")
@@ -806,51 +1003,111 @@ async def list_temp_files():
             })
     return files
 
+@app.delete("/api/files/temp")
+async def delete_temp_files(request: DeleteFileRequest):
+    """
+    Deletes specified files from the 'updatetemp' directory.
+    """
+    if not os.path.exists(UPDATETEMP_PATH):
+        return {"deleted": [], "failed": []}
+    
+    deleted = []
+    failed = []
+    
+    for filename in request.files:
+        # Security: Prevent path traversal
+        safe_path = os.path.join(UPDATETEMP_PATH, os.path.basename(filename))
+        if os.path.exists(safe_path):
+            try:
+                os.remove(safe_path)
+                deleted.append(filename)
+            except Exception as e:
+                failed.append({"file": filename, "error": str(e)})
+        else:
+            failed.append({"file": filename, "error": "File not found"})
+            
+    return {"deleted": deleted, "failed": failed}
+
 # --- Draft Management Endpoints ---
+
+def save_draft_generic(filename: str, data: Any):
+    try:
+        os.makedirs(TEMP_EDIT_PATH, exist_ok=True)
+        draft_path = os.path.join(TEMP_EDIT_PATH, filename)
+        with open(draft_path, 'w', encoding='utf-8') as f:
+            # If data is list of models, convert to list of dicts
+            if isinstance(data, list) and len(data) > 0 and hasattr(data[0], 'dict'):
+                json.dump([item.dict() for item in data], f, indent=4, ensure_ascii=False)
+            # If data is simple dict/list/str
+            elif hasattr(data, 'dict'):
+                json.dump(data.dict(), f, indent=4, ensure_ascii=False)
+            else:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+        return {"message": "Draft saved."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save draft: {e}")
+
+def get_draft_generic(filename: str):
+    draft_path = os.path.join(TEMP_EDIT_PATH, filename)
+    if not os.path.exists(draft_path):
+        return None # Return None to indicate no draft
+    try:
+        with open(draft_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        return None
 
 @app.post("/api/draft/glossary")
 async def save_glossary_draft(items: List[GlossaryItem]):
-    try:
-        os.makedirs(TEMP_EDIT_PATH, exist_ok=True)
-        draft_path = os.path.join(TEMP_EDIT_PATH, "glossary_draft.json")
-        with open(draft_path, 'w', encoding='utf-8') as f:
-            json.dump([item.dict() for item in items], f, indent=4, ensure_ascii=False)
-        return {"message": "Glossary draft saved."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save glossary draft: {e}")
+    return save_draft_generic("glossary_draft.json", items)
 
 @app.get("/api/draft/glossary")
 async def get_glossary_draft():
-    draft_path = os.path.join(TEMP_EDIT_PATH, "glossary_draft.json")
-    if not os.path.exists(draft_path):
-        return []
-    try:
-        with open(draft_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return []
+    return get_draft_generic("glossary_draft.json") or []
 
 @app.post("/api/draft/exclusion")
 async def save_exclusion_draft(items: List[ExclusionItem]):
-    try:
-        os.makedirs(TEMP_EDIT_PATH, exist_ok=True)
-        draft_path = os.path.join(TEMP_EDIT_PATH, "exclusion_draft.json")
-        with open(draft_path, 'w', encoding='utf-8') as f:
-            json.dump([item.dict() for item in items], f, indent=4, ensure_ascii=False)
-        return {"message": "Exclusion draft saved."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save exclusion draft: {e}")
+    return save_draft_generic("exclusion_draft.json", items)
 
 @app.get("/api/draft/exclusion")
 async def get_exclusion_draft():
-    draft_path = os.path.join(TEMP_EDIT_PATH, "exclusion_draft.json")
-    if not os.path.exists(draft_path):
-        return []
-    try:
-        with open(draft_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return []
+    return get_draft_generic("exclusion_draft.json") or []
+
+@app.post("/api/draft/characterization")
+async def save_characterization_draft(items: List[CharacterizationItem]):
+    return save_draft_generic("characterization_draft.json", items)
+
+@app.get("/api/draft/characterization")
+async def get_characterization_draft():
+    return get_draft_generic("characterization_draft.json") or []
+
+@app.post("/api/draft/translation_example")
+async def save_translation_example_draft(items: List[TranslationExampleItem]):
+    return save_draft_generic("translation_example_draft.json", items)
+
+@app.get("/api/draft/translation_example")
+async def get_translation_example_draft():
+    return get_draft_generic("translation_example_draft.json") or []
+
+@app.post("/api/draft/world_building")
+async def save_world_building_draft(data: StringContent):
+    return save_draft_generic("world_building_draft.json", data.content)
+
+@app.get("/api/draft/world_building")
+async def get_world_building_draft():
+    res = get_draft_generic("world_building_draft.json")
+    if res is None: return {"content": ""}
+    return {"content": res}
+
+@app.post("/api/draft/writing_style")
+async def save_writing_style_draft(data: StringContent):
+    return save_draft_generic("writing_style_draft.json", data.content)
+
+@app.get("/api/draft/writing_style")
+async def get_writing_style_draft():
+    res = get_draft_generic("writing_style_draft.json")
+    if res is None: return {"content": ""}
+    return {"content": res}
 
 # --- Static File Serving for the React Frontend ---
 

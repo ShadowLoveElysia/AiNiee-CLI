@@ -62,6 +62,12 @@ from ModuleFolders.UserInterface.InputListener import InputListener
 
 console = Console()
 
+# 角色介绍与翻译示例的校验键值对
+FEATURE_REQUIRED_KEYS = {
+    "characterization_data": {"original_name", "translated_name", "gender", "age", "personality", "speech_style", "additional_info"},
+    "translation_example_data": {"src", "dst"}
+}
+
 class I18NLoader:
     def __init__(self, lang="en"):
         self.lang, self.data = lang, {}
@@ -302,9 +308,13 @@ class CLIMenu:
     def __init__(self):
         self.root_config_path = os.path.join(PROJECT_ROOT, "Resource", "config.json")
         self.profiles_dir = os.path.join(PROJECT_ROOT, "Resource", "profiles")
+        self.rules_profiles_dir = os.path.join(PROJECT_ROOT, "Resource", "rules_profiles")
+        os.makedirs(self.rules_profiles_dir, exist_ok=True)
+        
         self.config = {}
         self.root_config = {}
         self.active_profile_name = "default"
+        self.active_rules_profile_name = "default"
         self.load_config()
 
         self.plugin_manager = PluginManager()
@@ -332,6 +342,11 @@ class CLIMenu:
             self.root_config["active_profile"] = args.profile
             self.save_config(save_root=True)
             self.load_config() # 重新加载配置
+            
+        if args.rules_profile:
+            self.root_config["active_rules_profile"] = args.rules_profile
+            self.save_config(save_root=True)
+            self.load_config()
         
         # 覆盖基础配置
         if args.source_lang: self.config["source_language"] = args.source_lang
@@ -433,18 +448,42 @@ class CLIMenu:
             except Exception:
                 user_config = {}
 
-        # 3. Merge: Start with base, then overlay user settings
-        # This ensures new parameters in preset.json are always present
+        # 3. Merge Settings: Start with base, then overlay user settings
         self.config = master_config_content.copy()
         if isinstance(user_config, dict):
             for k, v in user_config.items():
                 if isinstance(v, dict) and k in self.config and isinstance(self.config[k], dict):
-                    # Deep merge for dictionaries like platforms, api_settings, etc.
                     self.config[k].update(v)
                 else:
                     self.config[k] = v
 
-        # 4. If profile was missing or merged, ensure it's saved to disk
+        # 4. Load independent Rules Profile
+        rules_path = os.path.join(self.rules_profiles_dir, f"{self.active_rules_profile_name}.json")
+        if not os.path.exists(rules_path):
+            # Create default rules profile if missing
+            default_rules = {
+                "prompt_dictionary_data": [], "exclusion_list_data": [], "characterization_data": [],
+                "world_building_content": "", "writing_style_content": "", "translation_example_data": []
+            }
+            try:
+                with open(rules_path, 'w', encoding='utf-8') as f:
+                    json.dump(default_rules, f, indent=4, ensure_ascii=False)
+            except: pass
+        else:
+            try:
+                with open(rules_path, 'r', encoding='utf-8-sig') as f:
+                    rules_data = json.load(f)
+                # Apply rules to current config
+                rule_keys = [
+                    "prompt_dictionary_data", "exclusion_list_data", "characterization_data",
+                    "world_building_content", "writing_style_content", "translation_example_data"
+                ]
+                for rk in rule_keys:
+                    if rk in rules_data:
+                        self.config[rk] = rules_data[rk]
+            except: pass
+
+        # 5. If profile was missing or merged, ensure it's saved to disk
         if not profile_exists or not user_config:
             self.save_config()
             if not profile_exists:
@@ -460,24 +499,40 @@ class CLIMenu:
                 with open(self.root_config_path, 'r', encoding='utf-8') as f:
                     self.root_config = json.load(f)
                 self.active_profile_name = self.root_config.get("active_profile", "default")
+                self.active_rules_profile_name = self.root_config.get("active_rules_profile", "default")
             except (json.JSONDecodeError, UnicodeDecodeError):
                  # This can happen if the root config is the old, large settings file. Trigger migration path.
                  self.active_profile_name = "default"
+                 self.active_rules_profile_name = "default"
                  self._migrate_and_load_profiles()
                  return
         else:
             self.active_profile_name = "default"
+            self.active_rules_profile_name = "default"
         
         self._migrate_and_load_profiles()
 
     def save_config(self, save_root=False):
-        # Save the main settings to the active profile file
+        # 1. Save Settings (Exclude rules)
         active_profile_path = os.path.join(self.profiles_dir, f"{self.active_profile_name}.json")
         os.makedirs(os.path.dirname(active_profile_path), exist_ok=True)
+        
+        rule_keys = [
+            "prompt_dictionary_data", "exclusion_list_data", "characterization_data",
+            "world_building_content", "writing_style_content", "translation_example_data"
+        ]
+        
+        settings_to_save = {k: v for k, v in self.config.items() if k not in rule_keys}
         with open(active_profile_path, 'w', encoding='utf-8') as f:
-            json.dump(self.config, f, indent=4, ensure_ascii=False)
+            json.dump(settings_to_save, f, indent=4, ensure_ascii=False)
 
-        # Optionally save the root config (e.g., when changing active profile or recent projects)
+        # 2. Save Rules
+        active_rules_path = os.path.join(self.rules_profiles_dir, f"{self.active_rules_profile_name}.json")
+        rules_to_save = {k: v for k, v in self.config.items() if k in rule_keys}
+        with open(active_rules_path, 'w', encoding='utf-8') as f:
+            json.dump(rules_to_save, f, indent=4, ensure_ascii=False)
+
+        # Optionally save the root config (active profile pointers)
         if save_root:
             with open(self.root_config_path, 'w', encoding='utf-8') as f:
                 json.dump(self.root_config, f, indent=4, ensure_ascii=False)
@@ -485,7 +540,14 @@ class CLIMenu:
     def prompt_features_menu(self):
         while True:
             self.display_banner()
+            
+            target_platform = str(self.config.get("target_platform", "")).lower()
+            is_local = any(k in target_platform for k in ["local", "sakura"])
+            
             console.print(Panel(f"[bold]{i18n.get('menu_prompt_features')}[/bold]"))
+            if is_local:
+                console.print(f"[bold yellow]⚠ {i18n.get('msg_online_features_warning')}[/bold yellow]\n")
+
             table = Table(show_header=True)
             table.add_column("ID", style="dim")
             table.add_column("Feature")
@@ -498,10 +560,18 @@ class CLIMenu:
                 "writing_style_switch", "translation_example_switch", 
                 "few_shot_and_example_switch", "auto_process_text_code_segment"
             ]
+            
+            online_only_features = [
+                "characterization_switch", "world_building_switch", 
+                "writing_style_switch", "translation_example_switch"
+            ]
 
             for i, feature in enumerate(features, 1):
                 status = "[green]ON[/]" if self.config.get(feature, False) else "[red]OFF[/]"
-                table.add_row(str(i), i18n.get(f"feature_{feature}"), status)
+                label = i18n.get(f"feature_{feature}")
+                if feature in online_only_features:
+                    label += f" [dim]({i18n.get('label_online_only')})[/dim]"
+                table.add_row(str(i), label, status)
             
             console.print(table)
             console.print(f"\n[dim]0. {i18n.get('menu_back')}[/dim]")
@@ -545,10 +615,27 @@ class CLIMenu:
 
     def _update_recent_projects(self, project_path):
         recent = self.root_config.get("recent_projects", [])
-        if project_path in recent:
-            recent.remove(project_path)
-        recent.insert(0, project_path)
-        self.root_config["recent_projects"] = recent[:5] # Keep last 5
+        
+        # --- Migration & Cleanup ---
+        # Convert any old string-only entries to new object format
+        new_recent = []
+        for item in recent:
+            if isinstance(item, str):
+                new_recent.append({"path": item, "profile": "default", "rules_profile": "default"})
+            elif isinstance(item, dict) and "path" in item:
+                new_recent.append(item)
+        
+        # Remove current project if it exists in list (compare by path)
+        new_recent = [i for i in new_recent if i["path"] != project_path]
+        
+        # Add current project at start
+        new_recent.insert(0, {
+            "path": project_path,
+            "profile": self.active_profile_name,
+            "rules_profile": self.active_rules_profile_name
+        })
+        
+        self.root_config["recent_projects"] = new_recent[:5]
         self.save_config(save_root=True)
     def signal_handler(self, sig, frame):
         if self.task_running:
@@ -649,6 +736,45 @@ class CLIMenu:
                 self.start_web_server
             ]
             actions[choice]()
+
+    def rules_profiles_menu(self):
+        while True:
+            self.display_banner()
+            console.print(Panel(f"[bold]{i18n.get('menu_switch_profile_short')}[/bold]"))
+            
+            profiles = [f.replace(".json", "") for f in os.listdir(self.rules_profiles_dir) if f.endswith(".json")]
+            if not profiles: profiles = ["default"]
+
+            p_table = Table(show_header=False, box=None)
+            for i, p in enumerate(profiles):
+                p_table.add_row(f"[cyan]{i+1}.[/]", p + (" [green](Active)[/]" if p == self.active_rules_profile_name else ""))
+            console.print(p_table)
+            
+            console.print(f"\n[cyan]A.[/] {i18n.get('menu_profile_create')}")
+            console.print(f"[dim]0. {i18n.get('menu_back')}[/dim]")
+            
+            choice_str = Prompt.ask(i18n.get('prompt_select')).upper()
+            
+            if choice_str == '0': break
+            elif choice_str == 'A':
+                new_name = Prompt.ask(i18n.get("prompt_profile_name")).strip()
+                if new_name:
+                    path = os.path.join(self.rules_profiles_dir, f"{new_name}.json")
+                    with open(path, 'w', encoding='utf-8') as f:
+                        json.dump({}, f)
+                    console.print(f"[green]Rules Profile '{new_name}' created.[/green]")
+                    time.sleep(1)
+            elif choice_str.isdigit():
+                sel_idx = int(choice_str)
+                if 1 <= sel_idx <= len(profiles):
+                    sel = profiles[sel_idx - 1]
+                    self.active_rules_profile_name = sel
+                    self.root_config["active_rules_profile"] = sel
+                    self.save_config(save_root=True)
+                    self.load_config() # Reload everything to merge correctly
+                    console.print(f"[green]Switched to Rules Profile: {sel}[/green]")
+                    time.sleep(1)
+                    break
 
     def profiles_menu(self):
         while True:
@@ -1120,14 +1246,26 @@ class CLIMenu:
         while True:
             self.display_banner(); console.print(Panel(f"[bold]{i18n.get('menu_glossary_rules')}[/bold]"))
             
+            target_platform = str(self.config.get("target_platform", "")).lower()
+            is_local = any(k in target_platform for k in ["local", "sakura"])
+            
+            if is_local:
+                console.print(Panel(f"[bold yellow]⚠ {i18n.get('msg_online_features_warning')}[/bold yellow]", border_style="yellow"))
+
             trans_sel = self.config.get("translation_prompt_selection", {}).get("last_selected_id", "common")
             polish_sel = self.config.get("polishing_prompt_selection", {}).get("last_selected_id", "common")
             
             dict_sw = self.config.get("prompt_dictionary_switch", False)
             excl_sw = self.config.get("exclusion_list_switch", False)
+            char_sw = self.config.get("characterization_switch", False)
+            world_sw = self.config.get("world_building_switch", False)
+            style_sw = self.config.get("writing_style_switch", False)
+            examp_sw = self.config.get("translation_example_switch", False)
             
             dict_len = len(self.config.get("prompt_dictionary_data", []))
             excl_len = len(self.config.get("exclusion_list_data", []))
+            char_len = len(self.config.get("characterization_data", []))
+            examp_len = len(self.config.get("translation_example_data", []))
 
             table = Table(show_header=False, box=None)
             table.add_row("[cyan]1.[/]", f"{i18n.get('menu_select_trans_prompt')} ([green]{trans_sel}[/green])")
@@ -1135,9 +1273,19 @@ class CLIMenu:
             table.add_row("[cyan]3.[/]", f"{i18n.get('menu_dict_settings')} ([green]{'ON' if dict_sw else 'OFF'}[/green] | {dict_len} items)")
             table.add_row("[cyan]4.[/]", f"{i18n.get('menu_exclusion_settings')} ([green]{'ON' if excl_sw else 'OFF'}[/green] | {excl_len} items)")
             
+            table.add_section()
+            online_suffix = f" [dim]({i18n.get('label_online_only')})[/dim]"
+            table.add_row("[cyan]5.[/]", f"{i18n.get('feature_characterization_switch')} ([green]{'ON' if char_sw else 'OFF'}[/green] | {char_len} items){online_suffix}")
+            table.add_row("[cyan]6.[/]", f"{i18n.get('feature_world_building_switch')} ([green]{'ON' if world_sw else 'OFF'}[/green]){online_suffix}")
+            table.add_row("[cyan]7.[/]", f"{i18n.get('feature_writing_style_switch')} ([green]{'ON' if style_sw else 'OFF'}[/green]){online_suffix}")
+            table.add_row("[cyan]8.[/]", f"{i18n.get('feature_translation_example_switch')} ([green]{'ON' if examp_sw else 'OFF'}[/green] | {examp_len} items){online_suffix}")
+            
+            table.add_section()
+            table.add_row("[cyan]9.[/]", f"{i18n.get('menu_switch_profile_short')} ([yellow]{self.active_rules_profile_name}[/yellow])")
+
             console.print(table); console.print(f"\n[dim]0. {i18n.get('menu_exit')}[/dim]")
             
-            choice = IntPrompt.ask(i18n.get('prompt_select'), choices=["0", "1", "2", "3", "4"], show_choices=False)
+            choice = IntPrompt.ask(i18n.get('prompt_select'), choices=[str(i) for i in range(10)], show_choices=False)
             console.print()
             
             if choice == 0: break
@@ -1145,6 +1293,11 @@ class CLIMenu:
             elif choice == 2: self.select_prompt_template("Polishing", "polishing_prompt_selection")
             elif choice == 3: self.manage_text_rule("prompt_dictionary_switch", "prompt_dictionary_data", i18n.get("menu_dict_settings"))
             elif choice == 4: self.manage_text_rule("exclusion_list_switch", "exclusion_list_data", i18n.get("menu_exclusion_settings"))
+            elif choice == 5: self.manage_feature_content("characterization_switch", "characterization_data", i18n.get("feature_characterization_switch"), is_list=True)
+            elif choice == 6: self.manage_feature_content("world_building_switch", "world_building_content", i18n.get("feature_world_building_switch"), is_list=False)
+            elif choice == 7: self.manage_feature_content("writing_style_switch", "writing_style_content", i18n.get("feature_writing_style_switch"), is_list=False)
+            elif choice == 8: self.manage_feature_content("translation_example_switch", "translation_example_data", i18n.get("feature_translation_example_switch"), is_list=True)
+            elif choice == 9: self.rules_profiles_menu()
 
     def manage_text_rule(self, switch_key, data_key, title):
         while True:
@@ -1256,6 +1409,105 @@ class CLIMenu:
                     console.print(f"[yellow]{i18n.get('msg_data_cleared')}[/yellow]")
             self.save_config()
 
+    def manage_feature_content(self, switch_key, data_key, title, is_list=False):
+        while True:
+            sw = self.config.get(switch_key, False)
+            data = self.config.get(data_key, [] if is_list else "")
+            
+            # 定义模板
+            templates = {
+                "characterization_data": [{
+                    "original_name": "", "translated_name": "", "gender": "", 
+                    "age": "", "personality": "", "speech_style": "", "additional_info": ""
+                }],
+                "translation_example_data": [{"src": "", "dst": ""}]
+            }
+            
+            console.print(Panel(f"[bold]{title}[/bold]"))
+            table = Table(show_header=False, box=None)
+            table.add_row("[cyan]1.[/]", f"{i18n.get('menu_toggle_switch')} (Current: [green]{'ON' if sw else 'OFF'}[/green])")
+            
+            info_text = f"Items: {len(data)}" if is_list else f"Length: {len(data)} chars"
+            if not is_list and len(data) > 50: info_text += f" ({data[:47]}...)"
+            
+            table.add_row("[cyan]2.[/]", f"{i18n.get('menu_edit_content')} ({info_text})")
+            table.add_row("[cyan]3.[/]", f"{i18n.get('menu_clear_data')}")
+            console.print(table)
+            console.print(f"\n[dim]0. {i18n.get('menu_back')}[/dim]")
+            
+            c = IntPrompt.ask(i18n.get('prompt_select'), choices=["0", "1", "2", "3"], show_choices=False)
+            
+            if c == 0: break
+            elif c == 1:
+                self.config[switch_key] = not sw
+            elif c == 2:
+                if is_list:
+                    temp_dir = os.path.join(PROJECT_ROOT, "output", "temp_edit")
+                    os.makedirs(temp_dir, exist_ok=True)
+                    temp_path = os.path.join(temp_dir, f"{data_key}.json")
+                    
+                    # 如果数据为空，则写入模板
+                    edit_data = data if data else templates.get(data_key, [])
+                    
+                    try:
+                        with open(temp_path, 'w', encoding='utf-8') as f:
+                            json.dump(edit_data, f, indent=4, ensure_ascii=False)
+                        
+                        if open_in_editor(temp_path):
+                            Prompt.ask(f"\n{i18n.get('msg_press_enter_after_save')}")
+                            with open(temp_path, 'r', encoding='utf-8') as f:
+                                new_data = json.load(f)
+                                if isinstance(new_data, list):
+                                    # 简单格式校验
+                                    required = FEATURE_REQUIRED_KEYS.get(data_key)
+                                    if required and new_data:
+                                        valid = all(isinstance(item, dict) and required.issubset(item.keys()) for item in new_data if any(item.values()))
+                                        if not valid:
+                                            console.print(f"[yellow]Warning: Some items might be missing required keys: {required}[/yellow]")
+                                            if not Confirm.ask("Save anyway?", default=True):
+                                                continue
+                                    
+                                    # 过滤掉全空的占位项
+                                    if required:
+                                        new_data = [item for item in new_data if any(str(v).strip() for v in item.values())]
+
+                                    self.config[data_key] = new_data
+                                    console.print(f"[green]Data updated ({len(new_data)} items).[/green]")
+                                else:
+                                    console.print(f"[red]{i18n.get('msg_json_root_error')}[/red]")
+                    except Exception as e:
+                        console.print(f"[red]Error: {e}[/red]")
+                    finally:
+                        if os.path.exists(temp_path): os.remove(temp_path)
+                else:
+                    console.print(f"\n[cyan]1. {i18n.get('menu_edit_in_editor')}[/cyan]")
+                    console.print(f"[cyan]2. {i18n.get('menu_enter_manually')}[/cyan]")
+                    sc = IntPrompt.ask(i18n.get('prompt_select'), choices=["1", "2"], default=1, show_choices=False)
+                    if sc == 1:
+                        temp_dir = os.path.join(PROJECT_ROOT, "output", "temp_edit")
+                        os.makedirs(temp_dir, exist_ok=True)
+                        temp_path = os.path.join(temp_dir, f"{data_key}.txt")
+                        try:
+                            with open(temp_path, 'w', encoding='utf-8') as f:
+                                f.write(data)
+                            if open_in_editor(temp_path):
+                                Prompt.ask(f"\n{i18n.get('msg_press_enter_after_save')}")
+                                with open(temp_path, 'r', encoding='utf-8') as f:
+                                    self.config[data_key] = f.read()
+                                console.print(f"[green]Data updated.[/green]")
+                        except Exception as e:
+                            console.print(f"[red]Error: {e}[/red]")
+                        finally:
+                            if os.path.exists(temp_path): os.remove(temp_path)
+                    else:
+                        console.print(f"\n[dim]Current: {data}[/dim]")
+                        self.config[data_key] = Prompt.ask(i18n.get('prompt_enter_content')).strip()
+            elif c == 3:
+                if Confirm.ask(i18n.get("menu_clear_data") + "?"):
+                    self.config[data_key] = [] if is_list else ""
+                    console.print(f"[yellow]{i18n.get('msg_data_cleared')}[/yellow]")
+            self.save_config()
+
     def select_prompt_template(self, folder, key):
         prompt_dir = os.path.join(PROJECT_ROOT, "Resource", "Prompt", folder)
         if not os.path.exists(prompt_dir): return
@@ -1316,9 +1568,15 @@ class CLIMenu:
             
             if recent_projects:
                 menu_text += f"\n\n[bold cyan]--- {i18n.get('menu_recent_projects')} ---[/bold cyan]"
-                for i, path in enumerate(recent_projects):
+                for i, item in enumerate(recent_projects):
+                    path = item["path"] if isinstance(item, dict) else item
                     short_path = path if len(path) < 60 else "..." + path[-57:]
-                    menu_text += f"\n{recent_projects_start_idx + i}. {short_path}"
+                    
+                    profile_info = ""
+                    if isinstance(item, dict):
+                        profile_info = f" [dim]({item.get('profile', 'def')}/{item.get('rules_profile', 'def')})[/dim]"
+                    
+                    menu_text += f"\n{recent_projects_start_idx + i}. {short_path}{profile_info}"
                     choices.append(str(recent_projects_start_idx + i))
 
             menu_text += f"\n\n[dim]0. {i18n.get('menu_exit')}[/dim]"
@@ -1335,7 +1593,27 @@ class CLIMenu:
             elif choice >= recent_projects_start_idx:
                 recent_idx = choice - recent_projects_start_idx
                 if 0 <= recent_idx < len(recent_projects):
-                    target_path = recent_projects[recent_idx]
+                    item = recent_projects[recent_idx]
+                    if isinstance(item, dict):
+                        target_path = item["path"]
+                        # Auto-switch profiles
+                        p_name = item.get("profile")
+                        r_p_name = item.get("rules_profile")
+                        
+                        if p_name and p_name != self.active_profile_name:
+                            self.active_profile_name = p_name
+                            self.root_config["active_profile"] = p_name
+                            console.print(f"[dim]Auto-switched Profile to: {p_name}[/dim]")
+                        if r_p_name and r_p_name != self.active_rules_profile_name:
+                            self.active_rules_profile_name = r_p_name
+                            self.root_config["active_rules_profile"] = r_p_name
+                            console.print(f"[dim]Auto-switched Rules Profile to: {r_p_name}[/dim]")
+                        
+                        if p_name or r_p_name:
+                            self.save_config(save_root=True)
+                            self.load_config() # Reload to apply merge
+                    else:
+                        target_path = item
             elif choice == 1: # Single File
                 start_path = self.config.get("label_input_path", ".")
                 if os.path.isfile(start_path):
@@ -2011,6 +2289,7 @@ def main():
     # 路径与环境
     parser.add_argument('-o', '--output', dest='output_path', help=i18n.get('help_output'))
     parser.add_argument('-p', '--profile', dest='profile', help=i18n.get('help_profile'))
+    parser.add_argument('--rules-profile', dest='rules_profile', help="Rules profile to use (Glossary, Characterization, etc.)")
     parser.add_argument('-s', '--source', dest='source_lang', help=i18n.get('help_source'))
     parser.add_argument('-t', '--target', dest='target_lang', help=i18n.get('help_target'))
     parser.add_argument('--type', dest='project_type', help="Project type (Txt, Epub, MTool, RenPy, etc.)")
