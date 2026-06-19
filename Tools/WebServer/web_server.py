@@ -1089,6 +1089,11 @@ Term type: {term_type}
 Known context: {analysis_info}
 {avoid_hint}
 
+Translation is the exact replacement value that may be inserted into translated text. It must contain only the final translated surface form.
+Never output "translation (note)", "translation / note", "translation: note", "translation - note", or any other "translation + explanation" form in Translation.
+Never put identity, role labels, character relationships, context notes, disambiguation, jokes, or reader-facing hints in Translation; put them in Note.
+Qualifiers such as left/right/front/back or numbers may appear in Translation only when explicitly present in the source term. If no pure replacement-safe translation is certain, leave Translation empty.
+
 Output format (use | as separator):
 Translation|Note"""
 
@@ -1733,6 +1738,7 @@ def _run_glossary_analysis(input_path: str, analysis_percent: int, analysis_line
             results.append({
                 "src": term,
                 "type": data["type"],
+                "dst": data.get("dst", ""),
                 "info": data.get("info", "null"),
                 "count": data["count"]
             })
@@ -2155,6 +2161,19 @@ def _normalize_glossary_text(value, default: str = "") -> str:
     text = str(value).strip()
     return text if text else default
 
+def _build_analysis_glossary_item(row: dict) -> dict:
+    src = _normalize_glossary_text((row or {}).get("src"))
+    info = _clean_glossary_analysis_info(
+        (row or {}).get("info"),
+        (row or {}).get("type"),
+        (row or {}).get("category"),
+    )
+    return {
+        "src": src,
+        "dst": _normalize_glossary_text((row or {}).get("dst")),
+        "info": _normalize_glossary_text(info, "null"),
+    }
+
 def _rule_field_has_content(value) -> bool:
     if value is None:
         return False
@@ -2177,6 +2196,10 @@ def _append_glossary_analysis_translation_instruction(system_prompt: str, target
 
 Additional output requirement:
 - Translate extracted terms into "{target_language}" during analysis. Put the translation in the glossary item field "dst".
+- "src" is the source-text matching key; "dst" is the replacement value that may be inserted verbatim into translated text.
+- "dst" must contain only the final translated surface form. Never output "translation (note)", "translation / note", "translation: note", "translation - note", or any other "translation + explanation" form.
+- Never put identity, role labels, character relationships, context notes, disambiguation, jokes, memes, or reader-facing hints in "dst"; put them in "info" or "characterization".
+- Qualifiers such as left/right/front/back or numbers may appear in "dst" only when explicitly present in "src". If no pure replacement-safe translation is certain, leave "dst" empty.
 - Keep "src" as the original text. Do not put category/type labels into "info".
 - "type" is only the category, such as character, place, organization, skill, world setting, item, or term.
 - "info" must be a short note/annotation in "{target_language}" that explains the term's role, context, or usage.
@@ -2297,11 +2320,7 @@ async def save_analysis_results(request: SaveAnalysisRequest):
 
     # Convert to glossary format
     glossary_data = [
-        {
-            "src": r["src"],
-            "dst": _normalize_glossary_text(r.get("dst")),
-            "info": _clean_glossary_analysis_info(r.get("info"), r.get("type"), r.get("category")),
-        }
+        _build_analysis_glossary_item(r)
         for r in filtered
     ]
 

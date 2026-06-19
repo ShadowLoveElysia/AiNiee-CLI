@@ -33,6 +33,16 @@ Each item format:
 {"src": "source term", "type": "specific type", "category": "broad category", "info": "brief note or null"}
 ```
 
+When an added instruction requires a `dst` field, glossary items may include `"dst": "translation"`, but follow these strict rules:
+- `src` is the program's source-text matching key and must stay as the actual source spelling. `dst` is the replacement value that may be inserted verbatim into the translated text; it is not a note field, explanation field, or disambiguation field.
+- `dst` must contain only the final translated surface form. Never output "translation (note)", "translation / note", "translation: note", "translation - note", or any other "translation + explanation" form.
+- Never put identity, profession, faction, character relationship, protagonist/supporting-role labels, source notes, context notes, reasoning, jokes, memes, or reader-facing hints in `dst`.
+- Put identity, role, usage, relationship, left/right/front/back/number qualifiers, and all other explanations in `info` or `characterization`; do not pollute `dst` to make the term easier to understand.
+- A qualifier may appear in `dst` only when that qualifier is actually part of `src`. For example, if `src` is `魔王城の扉（右）`, `dst` may be `魔王城的门（右）`; if `src` is only `魔王城の扉`, `dst` must not be `魔王城的门（右）`, and the right-side note belongs in `info`.
+- For example, if `src` is `俺`, `dst` must be only `我` or empty, never `我（protagonist）`, `我 / protagonist`, or `我: protagonist`; the protagonist note belongs in `info` or `characterization`.
+- Ordinary first-person/second-person pronouns and address systems should usually not be extracted as glossary terms; put them in `characterization.pronouns` instead.
+- If you cannot provide a pure replacement value that is safe to insert into the translated text, leave `dst` as an empty string.
+
 Use one of these broad categories where possible:
 - "Character"
 - "Place"

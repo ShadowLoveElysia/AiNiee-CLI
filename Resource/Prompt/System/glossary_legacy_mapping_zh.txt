@@ -31,6 +31,12 @@ JSON 对象必须包含以下字段，字段名不可替换：
 任务：
 - 首要任务是把旧译文参考资料中能在当前原文找到对应证据的条目，映射成正式的“当前原文写法 -> 既有译名”规则；其次才是抽取当前原文中新出现的内容。
 - 如果当前原文术语或人物能可靠对应旧译文资料，请输出正式规则：glossary.src 必须是当前原文中的实际写法，glossary.dst 使用旧译文译名。
+- glossary.dst 和 characterization.translated_name 会被程序作为替换值或正式译名直接使用，不是备注栏、说明栏或消歧栏。
+- glossary.dst 和 characterization.translated_name 必须是可直接用于替换或命名的纯译名，禁止写成“译名（说明）”“译名/说明”“译名：说明”“译名-说明”等任何“译名 + 解释”的形式。
+- 禁止把身份、职业、阵营、角色关系、主角/配角标签、来源说明、上下文说明、推理过程、玩梗说明、读者提示写入 dst/translated_name。
+- 如果需要说明身份、作用、左右/前后/编号等限定信息，必须写入 info/additional_info；不要为了帮助理解而污染 dst/translated_name。
+- 只有当限定信息本身就是 src/original_name 原文写法的一部分时，才允许对应限定出现在 dst/translated_name 中。例如原文是「魔王城の扉（右）」时可以译作「魔王城的门（右）」；如果原文只是「魔王城の扉」，则不得写「魔王城的门（右）」。
+- 例如原文为「俺」时，dst 只能是「我」或空字符串，不能写「我（主人公）」「我/主角」「我：主人公」；主人公身份应写入 info 或 characterization。
 - 对人物，characterization.original_name 必须是当前原文中的实际名字或稳定称呼，translated_name 必须使用旧译文译名；可继承旧译文中的性格、关系、身份和口吻信息，但必须与当前原文证据不冲突。
 - characterization.aliases 只能填当前原文中实际出现、可直接用于匹配该人物的纯别名或称呼；不要把旧译文里的备注、玩梗说明、括号解释或来源说明写进 aliases，这类信息必须写入 additional_info。
 - 当前原文中新出现、旧译文资料没有覆盖的内容，也要按普通增量抽取输出；这些新增未映射条目可以让 dst/translated_name 为空，但不能带 _mapped_from。

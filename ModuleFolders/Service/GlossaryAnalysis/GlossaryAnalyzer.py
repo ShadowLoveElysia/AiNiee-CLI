@@ -1554,6 +1554,10 @@ class GlossaryAnalyzer:
 
         system_prompt = f"""You are a terminology translator. Translate all terms into "{target_language}".
 Each input item may include an "info" field with context from glossary analysis. Use it to keep names, character voice, places, items, and setting terms consistent.
+The "src" field is the source-text matching key. The "dst" field is the replacement value that may be inserted verbatim into translated text.
+"dst" must contain only the final translated surface form. Never output "translation (note)", "translation / note", "translation: note", "translation - note", or any other "translation + explanation" form.
+Never put identity, role labels, character relationships, context notes, disambiguation, jokes, or reader-facing hints in "dst"; put them in "info".
+Qualifiers such as left/right/front/back or numbers may appear in "dst" only when explicitly present in "src". If no pure replacement-safe translation is certain, leave "dst" empty.
 
 Output a JSON array, each element: {{"src": "original", "dst": "translation", "info": "note"}}
 Only output the JSON array, no other text."""
@@ -1715,6 +1719,11 @@ Only output the JSON array, no other text."""
 Term type: {term_type}
 Known context: {term_info}
 {avoid_hint}
+
+Translation is the exact replacement value that may be inserted into translated text. It must contain only the final translated surface form.
+Never output "translation (note)", "translation / note", "translation: note", "translation - note", or any other "translation + explanation" form in Translation.
+Never put identity, role labels, character relationships, context notes, disambiguation, jokes, or reader-facing hints in Translation; put them in Note.
+Qualifiers such as left/right/front/back or numbers may appear in Translation only when explicitly present in the source term. If no pure replacement-safe translation is certain, leave Translation empty.
 
 Output format (use | as separator):
 Translation|Note"""
@@ -3105,6 +3114,10 @@ Translation|Note"""
 
 Additional output requirement:
 - Translate extracted terms into "{target_language}" during analysis. Put the translation in the glossary item field "dst".
+- "src" is the source-text matching key; "dst" is the replacement value that may be inserted verbatim into translated text.
+- "dst" must contain only the final translated surface form. Never output "translation (note)", "translation / note", "translation: note", "translation - note", or any other "translation + explanation" form.
+- Never put identity, role labels, character relationships, context notes, disambiguation, jokes, memes, or reader-facing hints in "dst"; put them in "info" or "characterization".
+- Qualifiers such as left/right/front/back or numbers may appear in "dst" only when explicitly present in "src". If no pure replacement-safe translation is certain, leave "dst" empty.
 - Keep "src" as the original text. Do not put category/type labels into "info".
 - "type" is only the category, such as character, place, organization, skill, world setting, item, or term.
 - "info" must be a short note/annotation in "{target_language}" that explains the term's role, context, or usage.
