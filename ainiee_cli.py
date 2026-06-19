@@ -59,6 +59,7 @@ from ModuleFolders.Infrastructure.TaskConfig.ConfigProfileService import (
 
 console = Console()
 current_lang, i18n = initialize_i18n(PROJECT_ROOT)
+SPONSOR_IDS = ("往生", "Kingxiao")
 
 class CLIMenu:
     def __init__(self):
@@ -854,6 +855,7 @@ class CLIMenu:
             "automation": self.automation_menu.show,
             "profiles": self.profiles_menu,
             "qa": self.qa_menu,
+            "acknowledgements": self.show_acknowledgements,
             "update": self.update_manager.start_update,
             "update_web": lambda: self.update_manager.setup_web_server(manual=True),
             "start_web_server": self.start_web_server,
@@ -867,8 +869,8 @@ class CLIMenu:
     def _show_flat_main_menu(self) -> bool:
         self.display_banner()
         table = Table(show_header=False, box=None)
-        menus = ["start_translation", "start_manga_translation", "start_polishing", "start_all_in_one", "export_only", "editor", "settings", "api_settings", "glossary", "plugin_settings", "task_queue", "automation", "profiles", "qa", "update", "update_web", "start_web_server", "start_mcp_server", "manga_runtime_manager"]
-        colors = ["green", "cyan", "green", "bold green", "magenta", "bold cyan", "blue", "blue", "yellow", "cyan", "bold blue", "bold yellow", "cyan", "yellow", "dim", "bold magenta", "magenta", "bold magenta", "cyan"]
+        menus = ["start_translation", "start_manga_translation", "start_polishing", "start_all_in_one", "export_only", "editor", "settings", "api_settings", "glossary", "plugin_settings", "task_queue", "automation", "profiles", "qa", "update", "update_web", "start_web_server", "start_mcp_server", "manga_runtime_manager", "acknowledgements"]
+        colors = ["green", "cyan", "green", "bold green", "magenta", "bold cyan", "blue", "blue", "yellow", "cyan", "bold blue", "bold yellow", "cyan", "yellow", "dim", "bold magenta", "magenta", "bold magenta", "cyan", "bold yellow"]
         actions = self._main_menu_actions()
 
         for i, (menu_key, color) in enumerate(zip(menus, colors), 1):
@@ -920,6 +922,7 @@ class CLIMenu:
                 ("qa", "yellow"),
                 ("update", "dim"),
                 ("update_web", "bold magenta"),
+                ("acknowledgements", "bold yellow"),
             ]),
         ]
         table = Table(show_header=False, box=None)
@@ -958,6 +961,22 @@ class CLIMenu:
 
     def qa_menu(self):
         self.diagnostic_menu_handler.show()
+
+    def show_acknowledgements(self):
+        self.display_banner()
+        console.print(Panel(
+            i18n.get("acknowledgements_intro"),
+            title=f"[bold]{i18n.get('acknowledgements_title')}[/bold]",
+            expand=False,
+        ))
+
+        table = Table(show_header=True, box=None)
+        table.add_column(i18n.get("acknowledgements_sponsor_id"), style="bold cyan")
+        for sponsor_id in SPONSOR_IDS:
+            table.add_row(sponsor_id)
+        console.print(table)
+
+        Prompt.ask(f"\n{i18n.get('msg_press_enter')}")
 
     def handle_crash(self, error_msg, temp_config=None):
         self.crash_handler.handle_crash(error_msg, temp_config)

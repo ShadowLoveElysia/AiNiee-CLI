@@ -405,6 +405,18 @@ UV_PROJECT_ENVIRONMENT="$(pwd)/.venv" uv --directory "$(pwd)" add 'mcp' 'fastapi
 
 ---
 
+## 支持 AiNiee-Next
+
+如果这个项目对你有帮助喵，欢迎通过爱发电或赞赏码支持 AiNiee-Next 版本的持续开发与维护。支持人会被加入到项目鸣谢列表；无论金额多少，都是一份暖暖的心意喵，也是加速项目开发的动力。
+
+- 爱发电: https://ifdian.net/a/Next_ZhiXie
+
+<div align="center">
+  <img src="README_IMG/赞赏码.png" alt="赞赏码" width="320">
+</div>
+
+---
+
 <div align="center">
   Made by ShadowLoveElysia
   <br>
