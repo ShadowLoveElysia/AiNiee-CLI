@@ -1402,7 +1402,9 @@ export const Rules: React.FC = () => {
             </div>
 
             {/* Navigation Tabs */}
-            <div className="flex gap-2 bg-slate-900/50 p-2 rounded-lg border border-slate-800 overflow-x-auto no-scrollbar whitespace-nowrap">
+            <div
+                className="flex max-w-full gap-2 bg-slate-900/50 p-2 rounded-lg border border-slate-800 overflow-x-auto whitespace-nowrap overscroll-x-contain"
+            >
                 <TabButton id="glossary" icon={BookOpen} label={t('ui_rules_glossary')} />
                 <TabButton id="pre_translation" icon={FileJson} label={t('feature_pre_translation_switch')} />
                 <TabButton id="post_translation" icon={FileJson} label={t('feature_post_translation_switch')} />
@@ -1414,6 +1416,9 @@ export const Rules: React.FC = () => {
                 {timelineAvailable && <TabButton id="timeline" icon={Layers} label="时间线" />}
                 <TabButton id="ai_glossary" icon={Sparkles} label={t('ui_ai_glossary')} />
             </div>
+            <p className="px-1 -mt-4 text-xs text-slate-500">
+                {t('ui_rules_tabs_scroll_hint')}
+            </p>
 
             {/* Content Area */}
             <div className="bg-surface/50 border border-slate-800 rounded-xl p-4 md:p-6 backdrop-blur-sm min-h-[500px]">
