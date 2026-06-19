@@ -169,11 +169,15 @@ class GlossaryMenu:
             world_sw = self._saved_rule_switch("world_building_switch")
             style_sw = self._saved_rule_switch("writing_style_switch")
             examp_sw = self._saved_rule_switch("translation_example_switch")
+            pre_sw = self._saved_rule_switch("pre_translation_switch")
+            post_sw = self._saved_rule_switch("post_translation_switch")
 
             dict_len = len(self.config.get("prompt_dictionary_data", []))
             excl_len = len(self.config.get("exclusion_list_data", []))
             char_len = len(self.config.get("characterization_data", []))
             examp_len = len(self.config.get("translation_example_data", []))
+            pre_len = len(self.config.get("pre_translation_data", []) if isinstance(self.config.get("pre_translation_data", []), list) else [])
+            post_len = len(self.config.get("post_translation_data", []) if isinstance(self.config.get("post_translation_data", []), list) else [])
 
             table = Table(show_header=False, box=None)
             table.add_row("[cyan]1.[/]", f"{self.i18n.get('menu_select_trans_prompt')} ([green]{trans_sel}[/green])")
@@ -192,32 +196,40 @@ class GlossaryMenu:
                     f"({self._switch_status(excl_sw, disabled=not master_enabled)} | {excl_len} items)"
                 ),
             )
+            table.add_row(
+                self._child_index(5),
+                self._child_label(
+                    f"{self._tr('menu_translation_replacement_rules', '译前/译后处理规则')} "
+                    f"({self.i18n.get('feature_pre_translation_switch')}: {self._switch_status(pre_sw, disabled=not master_enabled)} | {pre_len} items; "
+                    f"{self.i18n.get('feature_post_translation_switch')}: {self._switch_status(post_sw, disabled=not master_enabled)} | {post_len} items)"
+                ),
+            )
 
             table.add_section()
             online_suffix = f" [dim]({self.i18n.get('label_online_only')})[/dim]"
             table.add_row(
-                self._child_index(5),
+                self._child_index(6),
                 self._child_label(
                     f"{self.i18n.get('feature_characterization_switch')} "
                     f"({self._switch_status(char_sw, disabled=not master_enabled)} | {char_len} items){online_suffix}"
                 ),
             )
             table.add_row(
-                self._child_index(6),
+                self._child_index(7),
                 self._child_label(
                     f"{self.i18n.get('feature_world_building_switch')} "
                     f"({self._switch_status(world_sw, disabled=not master_enabled)}){online_suffix}"
                 ),
             )
             table.add_row(
-                self._child_index(7),
+                self._child_index(8),
                 self._child_label(
                     f"{self.i18n.get('feature_writing_style_switch')} "
                     f"({self._switch_status(style_sw, disabled=not master_enabled)}){online_suffix}"
                 ),
             )
             table.add_row(
-                self._child_index(8),
+                self._child_index(9),
                 self._child_label(
                     f"{self.i18n.get('feature_translation_example_switch')} "
                     f"({self._switch_status(examp_sw, disabled=not master_enabled)} | {examp_len} items){online_suffix}"
@@ -225,18 +237,18 @@ class GlossaryMenu:
             )
 
             table.add_section()
-            table.add_row("[cyan]9.[/]", f"{self.i18n.get('menu_switch_profile_short')} ([yellow]{self.active_rules_profile_name}[/yellow])")
-            table.add_row("[cyan]10.[/]", f"{self.i18n.get('menu_rule_effective_preview') or '规则生效预览'}")
-            table.add_row("[cyan]11.[/]", f"{self.i18n.get('menu_system_prompts') or 'System Prompts'} ([dim]{self.i18n.get('label_readonly') or 'Read Only'}[/dim])")
-            table.add_row("[cyan]12.[/]", f"{self.i18n.get('menu_ai_glossary_analysis') or 'AI自动分析术语表'}")
-            table.add_row("[cyan]13.[/]", f"{self.i18n.get('menu_prompt_test') or '提示词测试'}")
+            table.add_row("[cyan]10.[/]", f"{self.i18n.get('menu_switch_profile_short')} ([yellow]{self.active_rules_profile_name}[/yellow])")
+            table.add_row("[cyan]11.[/]", f"{self.i18n.get('menu_rule_effective_preview') or '规则生效预览'}")
+            table.add_row("[cyan]12.[/]", f"{self.i18n.get('menu_system_prompts') or 'System Prompts'} ([dim]{self.i18n.get('label_readonly') or 'Read Only'}[/dim])")
+            table.add_row("[cyan]13.[/]", f"{self.i18n.get('menu_ai_glossary_analysis') or 'AI自动分析术语表'}")
+            table.add_row("[cyan]14.[/]", f"{self.i18n.get('menu_prompt_test') or '提示词测试'}")
 
             console.print(table)
             console.print(f"\n[dim]0. {self.i18n.get('menu_exit')}[/dim]")
 
             choice = Prompt.ask(
                 self.i18n.get('prompt_select'),
-                choices=[str(i) for i in range(14)] + ["G", "g"],
+                choices=[str(i) for i in range(15)] + ["G", "g"],
                 show_choices=False,
             ).upper()
             console.print("\n")
@@ -251,29 +263,73 @@ class GlossaryMenu:
                 self.select_prompt_template("Polishing", "polishing_prompt_selection")
             elif choice == "3":
                 self.manage_text_rule("prompt_dictionary_switch", "prompt_dictionary_data", self.i18n.get("menu_dict_settings"))
-            elif choice in {"4", "5", "6", "7", "8"} and not self._rules_master_enabled():
+            elif choice in {"4", "5", "6", "7", "8", "9"} and not self._rules_master_enabled():
                 console.print(f"[yellow]{self.i18n.get('msg_glossary_master_required')}[/yellow]")
                 time.sleep(1)
             elif choice == "4":
                 self.manage_text_rule("exclusion_list_switch", "exclusion_list_data", self.i18n.get("menu_exclusion_settings"))
             elif choice == "5":
-                self.manage_feature_content("characterization_switch", "characterization_data", self.i18n.get("feature_characterization_switch"), is_list=True)
+                self.translation_replacement_rules_menu()
             elif choice == "6":
-                self.manage_feature_content("world_building_switch", "world_building_content", self.i18n.get("feature_world_building_switch"), is_list=False)
+                self.manage_feature_content("characterization_switch", "characterization_data", self.i18n.get("feature_characterization_switch"), is_list=True)
             elif choice == "7":
-                self.manage_feature_content("writing_style_switch", "writing_style_content", self.i18n.get("feature_writing_style_switch"), is_list=False)
+                self.manage_feature_content("world_building_switch", "world_building_content", self.i18n.get("feature_world_building_switch"), is_list=False)
             elif choice == "8":
-                self.manage_feature_content("translation_example_switch", "translation_example_data", self.i18n.get("feature_translation_example_switch"), is_list=True)
+                self.manage_feature_content("writing_style_switch", "writing_style_content", self.i18n.get("feature_writing_style_switch"), is_list=False)
             elif choice == "9":
-                self.rules_profiles_menu()
+                self.manage_feature_content("translation_example_switch", "translation_example_data", self.i18n.get("feature_translation_example_switch"), is_list=True)
             elif choice == "10":
-                self.cli.rule_preview_menu.show()
+                self.rules_profiles_menu()
             elif choice == "11":
-                self.select_prompt_template("System", None)
+                self.cli.rule_preview_menu.show()
             elif choice == "12":
-                self.run_glossary_analysis_task()
+                self.select_prompt_template("System", None)
             elif choice == "13":
+                self.run_glossary_analysis_task()
+            elif choice == "14":
                 self.run_prompt_test()
+
+    def translation_replacement_rules_menu(self):
+        """译前/译后文本替换规则子菜单。"""
+        while True:
+            self.display_banner()
+            title = self._tr("menu_translation_replacement_rules", "译前/译后处理规则")
+            console.print(Panel(f"[bold]{title}[/bold]"))
+
+            entries = [
+                (
+                    "pre_translation_switch",
+                    "pre_translation_data",
+                    self.i18n.get("feature_pre_translation_switch"),
+                ),
+                (
+                    "post_translation_switch",
+                    "post_translation_data",
+                    self.i18n.get("feature_post_translation_switch"),
+                ),
+            ]
+            table = Table(show_header=False, box=None)
+            for index, (switch_key, data_key, label) in enumerate(entries, 1):
+                data = self.config.get(data_key, [])
+                count = len(data) if isinstance(data, list) else 0
+                table.add_row(
+                    f"[cyan]{index}.[/]",
+                    f"{label} ({self._switch_status(self._saved_rule_switch(switch_key))} | {count} items)",
+                )
+
+            console.print(table)
+            console.print(f"\n[dim]0. {self.i18n.get('menu_back')}[/dim]")
+
+            choice = IntPrompt.ask(
+                self.i18n.get("prompt_select"),
+                choices=["0", "1", "2"],
+                show_choices=False,
+            )
+            if choice == 0:
+                break
+
+            switch_key, data_key, label = entries[choice - 1]
+            self.manage_translation_replacement_rules(switch_key, data_key, label)
 
     def run_glossary_analysis_task(self, incremental_defaults=None, assume_series=False, legacy_mode_default="normal_extract"):
         """AI自动分析术语表功能入口"""

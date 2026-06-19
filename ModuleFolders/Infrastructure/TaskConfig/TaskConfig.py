@@ -12,6 +12,8 @@ from ModuleFolders.Infrastructure.TaskConfig.TaskType import TaskType
 from .default_config import DEFAULT_CONFIG
 
 RULE_CHILD_SWITCH_KEYS = (
+    "pre_translation_switch",
+    "post_translation_switch",
     "exclusion_list_switch",
     "characterization_switch",
     "world_building_switch",
@@ -20,6 +22,8 @@ RULE_CHILD_SWITCH_KEYS = (
 )
 
 RULE_RUNTIME_DATA_KEYS = (
+    "pre_translation_data",
+    "post_translation_data",
     "prompt_dictionary_data",
     "exclusion_list_data",
     "characterization_data",

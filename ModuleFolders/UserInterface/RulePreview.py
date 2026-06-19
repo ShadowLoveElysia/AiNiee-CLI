@@ -10,6 +10,8 @@ console = Console()
 
 
 RULE_DEFINITIONS = (
+    ("pre_translation_switch", "pre_translation_data", "feature_pre_translation_switch", "Pre-translation", "list"),
+    ("post_translation_switch", "post_translation_data", "feature_post_translation_switch", "Post-translation", "list"),
     ("prompt_dictionary_switch", "prompt_dictionary_data", "menu_dict_settings", "Glossary", "list"),
     ("exclusion_list_switch", "exclusion_list_data", "menu_exclusion_settings", "Non-translation", "list"),
     ("characterization_switch", "characterization_data", "banner_character_profile", "Characters", "list"),

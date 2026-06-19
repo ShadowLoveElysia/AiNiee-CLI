@@ -57,11 +57,6 @@ class SettingsMenu:
             if key == "automation_settings":
                 self.host.automation_menu.show()
                 continue
-            if key in ("pre_translation_switch", "post_translation_switch"):
-                data_key = "pre_translation_data" if key == "pre_translation_switch" else "post_translation_data"
-                title = self.i18n.get(item.i18n_key) if item.i18n_key else key
-                self.host.glossary_menu.manage_translation_replacement_rules(key, data_key, title)
-                continue
 
             new_value = builder.handle_input(key, item, console)
             if new_value is not None:
