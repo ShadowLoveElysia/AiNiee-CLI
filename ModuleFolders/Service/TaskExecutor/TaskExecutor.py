@@ -439,15 +439,66 @@ class TaskExecutor(Base):
                 # 结果处理
                 if content:
                     from ModuleFolders.Domain.ResponseExtractor.ResponseExtractor import ResponseExtractor
+                    from ModuleFolders.Domain.ResponseChecker.ResponseChecker import ResponseChecker
+
                     response_dict = ResponseExtractor.text_extraction(task, task.source_text_dict, content)
+                    response_dict = ResponseExtractor.normalize_numbered_prefixes(task, response_dict, task.source_text_dict)
 
                     if not Base.is_task_session_active(session_id):
                         return None
 
                     if response_dict:
+                        untranslated_retry_count = 0
+                        if getattr(task, "items", None):
+                            untranslated_retry_count = task.items[0].extra.get('untranslated_retry_count', 0)
+
+                        check_result, error_content = ResponseChecker.check_response_content(
+                            task,
+                            executor_self.config,
+                            getattr(task, "placeholder_order", {}),
+                            content,
+                            response_dict,
+                            task.source_text_dict,
+                            getattr(task, "source_lang", ""),
+                            untranslated_retry_count
+                        )
+
+                        if not check_result:
+                            executor_self.print(f"[red]✗ [{task_id}] Check failed: {error_content}[/red]")
+                            if "漏翻检测" in error_content:
+                                for item in task.items:
+                                    if not Base.is_task_session_active(session_id):
+                                        return None
+                                    with item.atomic_scope():
+                                        current_count = item.extra.get('untranslated_retry_count', 0)
+                                        item.extra['untranslated_retry_count'] = current_count + 1
+                            return {
+                                "check_result": False,
+                                "row_count": 0,
+                                "prompt_tokens": pt,
+                                "completion_tokens": ct,
+                                "extra_info": getattr(task, "extra_info", {}),
+                                "task_session_id": session_id,
+                            }
+
+                        response_dict = ResponseExtractor.remove_numbered_prefix(task, response_dict, task.source_text_dict)
+                        try:
+                            temp_dict = response_dict.copy()
+                            restored_response_dict = task.text_processor.restore_all(
+                                executor_self.config,
+                                temp_dict,
+                                getattr(task, "prefix_codes", {}),
+                                getattr(task, "suffix_codes", {}),
+                                getattr(task, "placeholder_order", {}),
+                                getattr(task, "affix_whitespace_storage", {}),
+                            )
+                        except Exception as exc:
+                            executor_self.error(f"[{task_id}] Post-processing error: {exc}")
+                            restored_response_dict = response_dict
+
                         if not Base.is_task_session_active(session_id):
                             return None
-                        for item, response in zip(task.items, response_dict.values()):
+                        for item, response in zip(task.items, restored_response_dict.values()):
                             if not Base.is_task_session_active(session_id):
                                 return None
                             with item.atomic_scope():
@@ -461,7 +512,7 @@ class TaskExecutor(Base):
                             return None
 
                         source_snapshot = "\n".join(str(v) for v in task.source_text_dict.values()) if getattr(task, "source_text_dict", None) else ""
-                        translated_snapshot = "\n".join(str(v) for v in response_dict.values())
+                        translated_snapshot = "\n".join(str(v) for v in restored_response_dict.values())
                         executor_self._push_web_comparison(source_snapshot, translated_snapshot)
 
                         if not Base.is_task_session_active(session_id):

@@ -294,17 +294,22 @@ class TranslateEngine:
 
     def _parse_translations(self, source_text_dict: dict[str, str], response_content: str) -> dict[str, str]:
         extracted = self.response_extractor.text_extraction(source_text_dict, response_content)
+        extracted = self.response_extractor.normalize_numbered_prefixes(extracted, source_text_dict)
         cleaned = {
-            str(key): self._clean_translation_text(value)
+            str(key): value
             for key, value in extracted.items()
-            if self._clean_translation_text(value)
+            if str(value).strip()
         }
         if cleaned:
-            return cleaned
+            return self.response_extractor.remove_numbered_prefix(cleaned, source_text_dict)
 
         textarea_matches = re.findall(r"<textarea.*?>(.*?)</textarea>", response_content, flags=re.DOTALL | re.IGNORECASE)
         content = textarea_matches[-1] if textarea_matches else response_content
-        matches = re.findall(r"^\s*(\d+)\.(.*?)(?=^\s*\d+\.|\Z)", content, flags=re.MULTILINE | re.DOTALL)
+        matches = re.findall(
+            rf"^\s*(\d+)[{ResponseExtractor.numbered_separator_chars}](.*?)(?=^\s*\d+[{ResponseExtractor.numbered_separator_chars}]|\Z)",
+            content,
+            flags=re.MULTILINE | re.DOTALL,
+        )
         fallback: dict[str, str] = {}
         for index_text, text in matches:
             try:

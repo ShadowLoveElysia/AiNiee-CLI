@@ -499,6 +499,7 @@ class TranslatorTask(Base):
 
         # 提取回复内容
         response_dict = ResponseExtractor.text_extraction(self, self.source_text_dict, response_content)
+        response_dict = ResponseExtractor.normalize_numbered_prefixes(self, response_dict, self.source_text_dict)
 
         if not Base.is_task_session_active(session_id):
             return {}
@@ -524,7 +525,7 @@ class TranslatorTask(Base):
             return {}
 
         # 去除回复内容的数字序号
-        response_dict = ResponseExtractor.remove_numbered_prefix(self, response_dict)
+        response_dict = ResponseExtractor.remove_numbered_prefix(self, response_dict, self.source_text_dict)
 
         # ---------------------------------------------------------
         # 结果处理与数据发送

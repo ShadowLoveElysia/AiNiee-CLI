@@ -8,9 +8,14 @@ from rich.markup import escape
 # 回复解析器
 class ResponseExtractor:
 
+    numbered_separator_chars = r'\.．。:：、\)\）'
+    numbered_prefix_reg = re.compile(rf'^\s*(\d+)[{numbered_separator_chars}]\s*')
+    numbered_split_reg = re.compile(rf'\n(?=\s*\d+[{numbered_separator_chars}])')
+    numbered_list_block_reg = re.compile(rf'^\s*(\d+)[{numbered_separator_chars}]\s*\[(.*)]$', re.DOTALL)
+
     # 多行文本数字匹配格式
     # 目前有两个匹配组，第一个为标准数字序号部分，第二个为可能出现的多余引号组（常见于deepseek-v3）
-    multiline_number_prefix = r'(\d+\.\d+\.)(")?[,，\s]?(?(2)"|)?'
+    multiline_number_prefix = rf'(\d+[{numbered_separator_chars}]\d+[{numbered_separator_chars}])(")?[,，\s]?(?(2)"|)?'
     # 多行文本段结束后缀
     multiline_quote_suffix = r'(?:\n["“”][,，]|["“”]\n[,，]|["“”]?[,，]?)$'
 
@@ -76,7 +81,7 @@ class ResponseExtractor:
         for key in sorted(output_dict.keys(), key=lambda k: int(k)):
             value = output_dict[key]
             if not found:
-                if re.match(r'^\d+\.', value):  # 匹配以数字和句点开头的行
+                if ResponseExtractor.numbered_prefix_reg.match(value):
                     found = True
                 else:
                     continue
@@ -97,7 +102,7 @@ class ResponseExtractor:
             一个字典，键是'0', '1', '2'...，值是提取到的文本行。
         """
         # 1. 初步分割: 按主序号分割成块
-        blocks = re.split(r'\n(?=\d+\.)', input_string.strip())
+        blocks = ResponseExtractor.numbered_split_reg.split(input_string.strip())
 
         extracted_items = []
 
@@ -109,9 +114,10 @@ class ResponseExtractor:
 
             # 3. 尝试匹配列表块模式 (N.[ ... ])
             # re.DOTALL 使 '.' 可以匹配换行符
-            list_block_match = re.match(r'^\d+\.\s*\[(.*)]$', block, re.DOTALL)
+            list_block_match = ResponseExtractor.numbered_list_block_reg.match(block)
             if list_block_match:
-                list_content = list_block_match.group(1).strip()
+                main_number = list_block_match.group(1)
+                list_content = list_block_match.group(2).strip()
                 # 再次判断是否是列表块内容(通过以特定模式开始作为判断)
                 if list_content and ResponseExtractor.multiline_start_reg.match(list_content):
                     items = ResponseExtractor.extract_multiline_content(self, list_content)
@@ -119,10 +125,10 @@ class ResponseExtractor:
                 else:
                     # 如果方括号内的内容不像带引号列表 (例如 "9.[社团活动后]")
                     # 将整个原始块（包括 N.[...] ）视为一个单独的文本项。
-                    extracted_items.append(block)
+                    extracted_items.append(f"{main_number}.[{list_content}]")
             else:
                 # 4.2 文本块: 不是 N.[...] 格式，直接添加整个块内容
-                extracted_items.append(block)
+                extracted_items.append(ResponseExtractor.normalize_numbered_line(block))
 
         # 5. 生成最终字典
         result_dict = {str(i): item for i, item in enumerate(extracted_items)}
@@ -164,13 +170,20 @@ class ResponseExtractor:
             if match:
                 try:
                     # 提取第1组(数字)和第3组(文本)
-                    number_part = match.group(1)
+                    raw_number_part = match.group(1)
+                    number_part = ResponseExtractor.normalize_multiline_number(raw_number_part)
                     text_part = match.group(3)
 
                     # 确保两个组都被成功捕获
                     if number_part is not None and text_part is not None:
                         # 去除`text_part`中可能出现的`number_part`
-                        cleaned_text_part = text_part.replace(number_part, '').replace(number_part.rstrip('.'), '')
+                        cleaned_text_part = (
+                            text_part
+                            .replace(raw_number_part, '')
+                            .replace(raw_number_part.rstrip('.．。:：、)）'), '')
+                            .replace(number_part, '')
+                            .replace(number_part.rstrip('.'), '')
+                        )
                         # 组合数字和文本，保留匹配到的 `text_part` 原始文本
                         assembled_content = f"{number_part},{cleaned_text_part}"
                         result.append(assembled_content)
@@ -201,6 +214,68 @@ class ResponseExtractor:
                     )
 
         return result
+
+    @staticmethod
+    def normalize_numbered_line(line: str) -> str:
+        match = ResponseExtractor.numbered_prefix_reg.match(line)
+        if not match:
+            return line
+        number = match.group(1)
+        return f"{number}.{line[match.end():]}"
+
+    @staticmethod
+    def normalize_multiline_number(number_text: str) -> str:
+        parts = re.findall(r'\d+', str(number_text or ""))
+        if len(parts) >= 2:
+            return f"{parts[0]}.{parts[1]}."
+        if len(parts) == 1:
+            return f"{parts[0]}."
+        return str(number_text or "")
+
+    def normalize_numbered_prefixes(self, translation_text_dict, source_text_dict=None):
+        output_dict = {}
+        for ordinal, (key, value) in enumerate(translation_text_dict.items(), start=1):
+            if not isinstance(value, str):
+                output_dict[key] = value
+                continue
+
+            source_text = None
+            if isinstance(source_text_dict, dict) and key in source_text_dict:
+                source_text = source_text_dict.get(key)
+            source_lines = str(source_text).split('\n') if isinstance(source_text, str) and '\n' in source_text else []
+            expected_sub_numbers = list(range(len(source_lines), 0, -1)) if source_lines else []
+
+            normalized_lines = []
+            for line_index, line in enumerate(value.split('\n')):
+                normalized = line
+                if line_index < len(expected_sub_numbers):
+                    normalized = ResponseExtractor._normalize_expected_multiline_prefix(
+                        normalized,
+                        ordinal,
+                        expected_sub_numbers[line_index],
+                    )
+                normalized = ResponseExtractor._normalize_expected_main_prefix(normalized, ordinal)
+                normalized_lines.append(normalized)
+            output_dict[key] = '\n'.join(normalized_lines)
+        return output_dict
+
+    @staticmethod
+    def _normalize_expected_main_prefix(line: str, expected_number: int) -> str:
+        match = ResponseExtractor.numbered_prefix_reg.match(line)
+        if not match or int(match.group(1)) != expected_number:
+            return line
+        return f"{expected_number}.{line[match.end():]}"
+
+    @staticmethod
+    def _normalize_expected_multiline_prefix(line: str, main_number: int, sub_number: int) -> str:
+        pattern = re.compile(
+            rf'^\s*{main_number}[{ResponseExtractor.numbered_separator_chars}]'
+            rf'{sub_number}[{ResponseExtractor.numbered_separator_chars}][,，、]?\s*'
+        )
+        match = pattern.match(line)
+        if not match:
+            return line
+        return f"{main_number}.{sub_number}.,{line[match.end():]}"
 
     # 辅助函数，统计原文中的换行符
     def count_newlines_in_dict_values(self,source_text_dict):
@@ -275,54 +350,42 @@ class ResponseExtractor:
 
 
     # 去除数字序号及括号
-    def remove_numbered_prefix(self, translation_text_dict):
+    def remove_numbered_prefix(self, translation_text_dict, source_text_dict=None):
         """
         去除翻译文本中的数字序号前缀。
-        
-        处理两个步骤：
-        1. 去除各种变形序号（包括特殊前缀字符 + 数字序号 + 特殊后缀标点）
-        2. 循环去除开头剩余的简单数字序号
-        
-        Args:
-            translation_text_dict: 翻译文本字典
-            
-        Returns:
-            处理后的文本字典
         """
         output_dict = {}
-        for key, value in translation_text_dict.items():
+        for ordinal, (key, value) in enumerate(translation_text_dict.items(), start=1):
 
             if not isinstance(value, str):
                 output_dict[key] = value
                 continue
-                
+
+            source_text = None
+            if isinstance(source_text_dict, dict) and key in source_text_dict:
+                source_text = source_text_dict.get(key)
+            source_lines = str(source_text).split('\n') if isinstance(source_text, str) and '\n' in source_text else []
+            expected_sub_numbers = list(range(len(source_lines), 0, -1)) if source_lines else []
+
             translation_lines = value.split('\n')
             cleaned_lines = []
-            
-            for i, line in enumerate(translation_lines):
+
+            for line_index, line in enumerate(translation_lines):
                 temp_line = line
-                
-                # 第一步：去除各种变形序号
-                # 匹配模式：[可选空白][可选特殊前缀][数字序号][可选标点后缀][可选空白]
-                # - 特殊前缀：「『【……□ 等引号、省略号、方框等字符
-                # - 数字序号：支持 1. 或 1.2. 或 1.2.3. 等多级序号
-                # - 标点后缀：, ， 、等中英文标点
-                temp_line = re.sub(
-                    r'^\s*[「『【（\(……□\s]*\d+(\.\d+)*\.[,，、]?\s*',
-                    '',
-                    temp_line
-                )
-                
-                # 第二步：循环去除开头剩余的 数字. 格式
-                # 处理可能存在的嵌套或多余的数字序号
-                max_iterations = 2  # 设置最大迭代次数，防止意外无限循环
-                for iteration in range(max_iterations):
-                    new_line = re.sub(r'^\s*\d+\.\s*', '', temp_line)
-                    # 如果没有变化，说明已经清理完毕
-                    if new_line == temp_line:
-                        break
-                    temp_line = new_line
-                
+
+                if line_index < len(expected_sub_numbers):
+                    temp_line = ResponseExtractor._strip_expected_multiline_prefix(
+                        temp_line,
+                        ordinal,
+                        expected_sub_numbers[line_index],
+                    )
+                else:
+                    temp_line = ResponseExtractor._strip_expected_main_prefix(temp_line, ordinal)
+
+                    duplicate_stripped = ResponseExtractor._strip_expected_main_prefix(temp_line, ordinal)
+                    if duplicate_stripped != temp_line and not ResponseExtractor._looks_like_decimal_continuation(temp_line, ordinal):
+                        temp_line = duplicate_stripped
+
                 cleaned_lines.append(temp_line)
 
             processed_text = '\n'.join(cleaned_lines)
@@ -332,3 +395,36 @@ class ResponseExtractor:
             output_dict[key] = final_text
             
         return output_dict
+
+    @staticmethod
+    def _strip_expected_main_prefix(line: str, expected_number: int) -> str:
+        pattern = re.compile(rf'^\s*{expected_number}([{ResponseExtractor.numbered_separator_chars}])([ \t]*)')
+        match = pattern.match(line)
+        if not match:
+            return line
+        remainder = line[match.end():]
+        separator = match.group(1)
+        spacing = match.group(2)
+        duplicate_pattern = re.compile(rf'^{expected_number}[{ResponseExtractor.numbered_separator_chars}][ \t]*')
+        duplicate_match = duplicate_pattern.match(remainder)
+        if duplicate_match:
+            return remainder[duplicate_match.end():]
+        if separator in ".．" and not spacing and remainder[:1].isdigit():
+            return line
+        return remainder
+
+    @staticmethod
+    def _strip_expected_multiline_prefix(line: str, main_number: int, sub_number: int) -> str:
+        pattern = re.compile(
+            rf'^\s*{main_number}[{ResponseExtractor.numbered_separator_chars}]'
+            rf'{sub_number}[{ResponseExtractor.numbered_separator_chars}][,，、]?[ \t]*'
+        )
+        match = pattern.match(line)
+        if not match:
+            return line
+        return line[match.end():]
+
+    @staticmethod
+    def _looks_like_decimal_continuation(line: str, expected_number: int) -> bool:
+        pattern = re.compile(rf'^\s*{expected_number}[\.．]\d')
+        return bool(pattern.match(line))

@@ -305,6 +305,7 @@ class PolisherTask(Base):
 
         # 提取回复内容
         response_dict = ResponseExtractor.text_extraction(self, text_dict, response_content)
+        response_dict = ResponseExtractor.normalize_numbered_prefixes(self, response_dict, text_dict)
 
         if not Base.is_task_session_active(session_id):
             return {}
@@ -322,7 +323,7 @@ class PolisherTask(Base):
             return {}
 
         # 去除回复内容的数字序号
-        response_dict = ResponseExtractor.remove_numbered_prefix(self, response_dict)
+        response_dict = ResponseExtractor.remove_numbered_prefix(self, response_dict, text_dict)
 
 
         # 模型回复日志

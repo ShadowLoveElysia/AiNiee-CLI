@@ -397,6 +397,7 @@ class SimpleExecutor(Base):
 
             # 解析和校验
             response_dict = ResponseExtractor.text_extraction(self, source_text_dict, response_content)
+            response_dict = ResponseExtractor.normalize_numbered_prefixes(self, response_dict, source_text_dict)
             check_result, _ = ResponseChecker.check_polish_response_content(
                 self, config, response_content, response_dict, source_text_dict
             )
@@ -412,7 +413,12 @@ class SimpleExecutor(Base):
             }
 
             # 移除前缀并返回
-            updated_items = ResponseExtractor.remove_numbered_prefix(self, restored_response_dict)
+            source_text_by_output_index = {
+                index_map[int(temp_idx_str)]: source_text_dict[temp_idx_str]
+                for temp_idx_str in response_dict
+                if temp_idx_str in source_text_dict
+            }
+            updated_items = ResponseExtractor.remove_numbered_prefix(self, restored_response_dict, source_text_by_output_index)
             print(f" <- [批次 {batch_num}] ✅ 完成 (解析出 {len(updated_items)} 条)")
             return updated_items
 
@@ -521,6 +527,7 @@ class SimpleExecutor(Base):
 
             # 解析校验
             response_dict = ResponseExtractor.text_extraction(self, text_dict, response_content)
+            response_dict = ResponseExtractor.normalize_numbered_prefixes(self, response_dict, text_dict)
             check_result, _ = ResponseChecker.check_polish_response_content(
                 self, config, response_content, response_dict, text_dict
             )
@@ -534,7 +541,12 @@ class SimpleExecutor(Base):
                 index_map[int(temp_idx_str)]: text
                 for temp_idx_str, text in response_dict.items()
             }
-            updated_items = ResponseExtractor.remove_numbered_prefix(self, restored_response_dict)
+            text_by_output_index = {
+                index_map[int(temp_idx_str)]: text_dict[temp_idx_str]
+                for temp_idx_str in response_dict
+                if temp_idx_str in text_dict
+            }
+            updated_items = ResponseExtractor.remove_numbered_prefix(self, restored_response_dict, text_by_output_index)
             print(f" <- [批次 {batch_num}] ✅ 完成 (解析出 {len(updated_items)} 条)")
             return updated_items
 
