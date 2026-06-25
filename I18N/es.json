@@ -420,6 +420,7 @@
     "label_cache_recovery_modified_time": "Modificado",
     "label_cache_recovery_size": "Tamaño",
     "label_cache_recovery_items": "Elementos",
+    "label_cache_recovery_progress": "Progreso",
     "label_cache_recovery_project": "Proyecto",
     "label_cache_recovery_file": "Archivo",
     "prompt_cache_recovery_select": "Selecciona la versión de caché a restaurar",

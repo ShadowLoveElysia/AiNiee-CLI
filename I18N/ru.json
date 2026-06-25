@@ -420,6 +420,7 @@
     "label_cache_recovery_modified_time": "Изменен",
     "label_cache_recovery_size": "Размер",
     "label_cache_recovery_items": "Элементы",
+    "label_cache_recovery_progress": "Прогресс",
     "label_cache_recovery_project": "Проект",
     "label_cache_recovery_file": "Файл",
     "prompt_cache_recovery_select": "Выберите версию кэша для восстановления",

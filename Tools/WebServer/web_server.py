@@ -4,6 +4,7 @@ import sys
 import json
 import re
 import secrets
+import shutil
 import threading
 import subprocess
 import time
@@ -3020,6 +3021,10 @@ class CacheUpdateRequest(BaseModel):
 class CacheLoadRequest(BaseModel):
     project_path: str
 
+class CacheRestoreRequest(BaseModel):
+    project_path: str
+    backup_file: str
+
 class ProofreadStartRequest(BaseModel):
     project_path: str
 
@@ -3036,6 +3041,21 @@ def get_cache_manager():
         return _cache_manager_instance
     except ImportError:
         raise HTTPException(status_code=500, detail="CacheManager not available")
+
+def resolve_cache_output_path(project_path: str) -> str:
+    input_path = os.path.normpath(project_path.strip())
+    if not input_path:
+        raise HTTPException(status_code=400, detail="Project path is required")
+    if input_path.endswith("AinieeCacheData.json"):
+        return os.path.dirname(os.path.dirname(input_path))
+    if input_path.endswith("cache"):
+        return os.path.dirname(input_path)
+    if "AinieeCacheData.json" in input_path:
+        cache_filename_pos = input_path.find("AinieeCacheData.json")
+        if cache_filename_pos != -1:
+            cache_dir = input_path[:cache_filename_pos].rstrip(os.path.sep)
+            return os.path.dirname(cache_dir)
+    return input_path
 
 @app.get("/api/cache/status")
 async def get_cache_status():
@@ -3069,29 +3089,9 @@ async def load_cache(request: CacheLoadRequest):
     try:
         cache_manager = get_cache_manager()
 
-        # Smart path handling - detect if path already points to cache file or directory
         input_path = request.project_path.strip()
-
-        # Normalize path separators for Windows
         input_path = os.path.normpath(input_path)
-
-        # Determine the correct output_path for CacheManager
-        if input_path.endswith("AinieeCacheData.json"):
-            # Path points directly to cache file
-            output_path = os.path.dirname(os.path.dirname(input_path))  # Remove /cache/AinieeCacheData.json
-        elif input_path.endswith("cache"):
-            # Path points to cache directory
-            output_path = os.path.dirname(input_path)  # Remove /cache
-        elif "AinieeCacheData.json" in input_path:
-            # Handle case where path contains the filename but endswith failed due to encoding issues
-            cache_filename_pos = input_path.find("AinieeCacheData.json")
-            if cache_filename_pos != -1:
-                cache_dir = input_path[:cache_filename_pos].rstrip(os.path.sep)
-                output_path = os.path.dirname(cache_dir)
-                input_path = os.path.join(cache_dir, "AinieeCacheData.json")
-        else:
-            # Path points to project directory (output directory)
-            output_path = input_path
+        output_path = resolve_cache_output_path(input_path)
 
         # Validate that cache file exists before attempting to load
         if input_path.endswith("AinieeCacheData.json"):
@@ -3148,6 +3148,64 @@ async def load_cache(request: CacheLoadRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load cache: {e}")
+
+@app.get("/api/cache/backups")
+async def list_cache_backups(project_path: str):
+    try:
+        output_path = resolve_cache_output_path(project_path)
+        cache_manager = get_cache_manager()
+        candidates = cache_manager._collect_valid_backup_caches(output_path)
+        return {
+            "backups": [
+                {
+                    "file": os.path.basename(candidate["path"]),
+                    "modified_time": candidate["modified_time"],
+                    "size": candidate["size"],
+                    "size_label": candidate["size_label"],
+                    "project_name": candidate["project_name"],
+                    "item_count": candidate["item_count"],
+                    "translated_count": candidate["translated_count"],
+                    "total_count": candidate["total_count"],
+                    "completion_rate": candidate["completion_rate"],
+                    "completion_label": candidate["completion_label"],
+                }
+                for candidate in candidates
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list cache backups: {e}")
+
+@app.post("/api/cache/restore")
+async def restore_cache_backup(request: CacheRestoreRequest):
+    try:
+        output_path = resolve_cache_output_path(request.project_path)
+        backup_file = os.path.basename(request.backup_file)
+        backup_dir = os.path.join(output_path, "cache", "backups")
+        backup_path = os.path.realpath(os.path.join(backup_dir, backup_file))
+        backup_dir_real = os.path.realpath(backup_dir)
+        if os.path.commonpath([backup_dir_real, backup_path]) != backup_dir_real:
+            raise HTTPException(status_code=400, detail="Invalid backup file")
+        if not os.path.isfile(backup_path):
+            raise HTTPException(status_code=404, detail="Backup file not found")
+
+        cache_manager = get_cache_manager()
+        project = cache_manager.read_from_file(backup_path)
+        main_cache_path = os.path.join(output_path, "cache", "AinieeCacheData.json")
+        os.makedirs(os.path.dirname(main_cache_path), exist_ok=True)
+        shutil.copy2(backup_path, main_cache_path)
+        cache_manager.load_from_project(project)
+
+        return {
+            "success": True,
+            "message": "Cache backup restored successfully",
+            "file": backup_file,
+            "file_count": len(cache_manager.project.files),
+            "total_items": cache_manager.get_item_count(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to restore cache backup: {e}")
 
 @app.get("/api/cache/items")
 async def get_cache_items(page: int = 1, page_size: Optional[int] = None, search: str = None):

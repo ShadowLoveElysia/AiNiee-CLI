@@ -1365,6 +1365,21 @@ class CLIMenu:
              elif Confirm.ask(f"\n[yellow]Detected existing cache for this file. Resume?[/yellow]", default=True):
                  continue_status = True
 
+        preloaded_resume_cache = False
+        if continue_status and not web_mode and not automation_progress:
+            cache_file_path = os.path.join(opath, "cache", "AinieeCacheData.json")
+            if os.path.exists(cache_file_path):
+                console.print(f"[cyan]Checking resume cache before entering TUI: {cache_file_path}[/cyan]")
+                try:
+                    self.cache_manager.load_from_file(opath, interactive_recovery=not from_queue and not non_interactive)
+                    preloaded_resume_cache = True
+                except Exception as e:
+                    console.print(f"[yellow]{i18n.get('msg_resume_cache_load_failed_rebuild').format(e)}[/yellow]")
+                    continue_status = False
+            else:
+                console.print(f"[yellow]{i18n.get('msg_resume_cache_missing_rebuild')}[/yellow]")
+                continue_status = False
+
         # --- 格式转换询问逻辑 ---
         self.target_output_format = None
         if self.config.get("enable_post_conversion", False) and not non_interactive:
@@ -1721,10 +1736,13 @@ class CLIMenu:
                     cache_loaded = False
                     if resume_mode:
                         cache_file_path = os.path.join(opath, "cache", "AinieeCacheData.json")
-                        if os.path.exists(cache_file_path):
+                        if preloaded_resume_cache:
+                            self.ui.log(f"[cyan]Resuming from cache: {cache_file_path}[/cyan]")
+                            cache_loaded = True
+                        elif os.path.exists(cache_file_path):
                             self.ui.log(f"[cyan]Resuming from cache: {cache_file_path}[/cyan]")
                             try:
-                                self.cache_manager.load_from_file(opath)
+                                self.cache_manager.load_from_file(opath, interactive_recovery=False)
                                 cache_loaded = True
                             except Exception as e:
                                 self.ui.log(f"[yellow]{i18n.get('msg_resume_cache_load_failed_rebuild').format(e)}[/yellow]")

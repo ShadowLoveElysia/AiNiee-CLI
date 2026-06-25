@@ -420,6 +420,7 @@
     "label_cache_recovery_modified_time": "修改時間",
     "label_cache_recovery_size": "大小",
     "label_cache_recovery_items": "項目",
+    "label_cache_recovery_progress": "進度",
     "label_cache_recovery_project": "專案",
     "label_cache_recovery_file": "檔案",
     "prompt_cache_recovery_select": "請選擇要復原的快取版本",

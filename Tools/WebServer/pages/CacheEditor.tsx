@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, ArchiveRestore, DatabaseBackup, RefreshCw } from 'lucide-react';
 import { useI18n } from '../contexts/I18nContext';
 import { useGlobal } from '../contexts/GlobalContext';
 
@@ -19,6 +19,18 @@ interface CacheStatus {
   file_count: number;
   total_items: number;
   project_name: string | null;
+}
+
+interface CacheBackup {
+  file: string;
+  modified_time: string;
+  size_label: string;
+  project_name: string;
+  item_count: number;
+  translated_count: number;
+  total_count: number;
+  completion_rate: number;
+  completion_label: string;
 }
 
 interface Pagination {
@@ -135,6 +147,11 @@ export const CacheEditor: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [projectPath, setProjectPath] = useState(() => savedState?.projectPath || '');
+  const [cacheBackups, setCacheBackups] = useState<CacheBackup[]>([]);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [backupRestoring, setBackupRestoring] = useState<string | null>(null);
+  const [showBackups, setShowBackups] = useState(false);
+  const [backupMessage, setBackupMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState(() => savedState?.searchQuery || '');
   const [editingItem, setEditingItem] = useState<number | null>(null);
   const [editingText, setEditingText] = useState('');
@@ -318,9 +335,13 @@ export const CacheEditor: React.FC = () => {
         throw new Error(errorData.detail || t('cache_editor_failed_load_cache'));
       }
 
-      const result = await response.json();
+      await response.json();
       await checkCacheStatus(); // Refresh status
       setError(null);
+      setBackupMessage(null);
+      if (showBackups) {
+        await loadCacheBackups(projectPath);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t('cache_editor_failed_load_cache'));
     } finally {
@@ -344,17 +365,88 @@ export const CacheEditor: React.FC = () => {
     console.log('Cache restored from saved path:', path);
   };
 
-  const loadCacheItems = async () => {
+  const loadCacheBackups = async (path = projectPath) => {
+    if (!path.trim()) {
+      setError(t('cache_editor_enter_project_path'));
+      return;
+    }
+
+    setBackupLoading(true);
+    setError(null);
+    setBackupMessage(null);
+
+    try {
+      const params = new URLSearchParams({ project_path: path });
+      const response = await fetch(`/api/cache/backups?${params}`);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || t('cache_editor_backups_load_failed'));
+      }
+
+      const data = await response.json();
+      setCacheBackups(data.backups || []);
+      setShowBackups(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('cache_editor_backups_load_failed'));
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
+  const restoreCacheBackup = async (backup: CacheBackup) => {
+    if (!projectPath.trim()) {
+      setError(t('cache_editor_enter_project_path'));
+      return;
+    }
+
+    const confirmed = window.confirm(t('cache_editor_backup_restore_confirm', backup.file));
+    if (!confirmed) {
+      return;
+    }
+
+    setBackupRestoring(backup.file);
+    setError(null);
+    setBackupMessage(null);
+
+    try {
+      const response = await fetch('/api/cache/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_path: projectPath,
+          backup_file: backup.file
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || t('cache_editor_backup_restore_failed'));
+      }
+
+      await checkCacheStatus();
+      setCurrentPage(1);
+      await loadCacheItems(1);
+      await loadCacheBackups(projectPath);
+      setBackupMessage(t('cache_editor_backup_restored', backup.file));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('cache_editor_backup_restore_failed'));
+    } finally {
+      setBackupRestoring(null);
+    }
+  };
+
+  const loadCacheItems = async (page = currentPage, search = searchQuery) => {
     setLoading(true);
     setCurrentLine(0);
     try {
       const params = new URLSearchParams({
-        page: currentPage.toString(),
+        page: page.toString(),
         page_size: pageSize.toString()
       });
 
-      if (searchQuery) {
-        params.append('search', searchQuery);
+      if (search) {
+        params.append('search', search);
       }
 
       const response = await fetch(`/api/cache/items?${params}`);
@@ -656,7 +748,11 @@ export const CacheEditor: React.FC = () => {
               <input
                 type="text"
                 value={projectPath}
-                onChange={(e) => setProjectPath(e.target.value)}
+                onChange={(e) => {
+                  setProjectPath(e.target.value);
+                  setCacheBackups([]);
+                  setBackupMessage(null);
+                }}
                 placeholder={t('cache_editor_project_path_placeholder')}
                 className="w-full pl-16 pr-3 py-2 bg-slate-950/50 border border-white/10 rounded-lg focus:border-primary focus:ring-1 focus:ring-primary transition-all text-sm text-white"
               />
@@ -674,6 +770,20 @@ export const CacheEditor: React.FC = () => {
             ) : null}
             {t('cache_editor_load_cache')}
           </button>
+          <button
+            onClick={() => showBackups ? setShowBackups(false) : loadCacheBackups()}
+            disabled={backupLoading || !projectPath.trim()}
+            className="px-4 py-2 bg-white/5 text-slate-300 rounded-lg hover:bg-white/10 transition-colors text-sm border border-white/10 flex items-center gap-2 min-h-11 disabled:opacity-50 disabled:cursor-not-allowed"
+            title={t('cache_editor_backups')}
+            aria-expanded={showBackups}
+          >
+            {backupLoading ? (
+              <RefreshCw size={16} className="animate-spin" />
+            ) : (
+              <DatabaseBackup size={16} />
+            )}
+            {t('cache_editor_backups')}
+          </button>
           {cacheStatus.loaded && (
             <button
               onClick={() => {
@@ -683,6 +793,9 @@ export const CacheEditor: React.FC = () => {
                 setCurrentPage(1);
                 setSearchQuery('');
                 setCurrentLine(0);
+                setCacheBackups([]);
+                setShowBackups(false);
+                setBackupMessage(null);
                 localStorage.removeItem(CACHE_EDITOR_STATE_KEY);
                 setSavedState(null);
               }}
@@ -692,6 +805,94 @@ export const CacheEditor: React.FC = () => {
             </button>
           )}
         </div>
+
+        {showBackups && (
+          <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950/40">
+            <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-white/5">
+              <div className="flex items-center gap-2 min-w-0">
+                <DatabaseBackup size={16} className={elysiaActive ? 'text-pink-400' : 'text-cyan-400'} />
+                <span className="text-xs font-bold text-slate-200">{t('cache_editor_backups')}</span>
+                <span className="text-[10px] text-slate-500">{cacheBackups.length}</span>
+              </div>
+              <button
+                onClick={() => loadCacheBackups()}
+                disabled={backupLoading}
+                className="px-3 py-1.5 min-h-9 rounded-md bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white transition-colors text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <RefreshCw size={13} className={backupLoading ? 'animate-spin' : ''} />
+                {t('cache_editor_backup_refresh')}
+              </button>
+            </div>
+            {backupMessage && (
+              <div className="px-3 py-2 text-xs text-green-300 bg-green-500/10 border-b border-green-500/20">
+                {backupMessage}
+              </div>
+            )}
+            {backupLoading ? (
+              <div className="px-3 py-8 text-center text-xs text-slate-500">
+                {t('cache_editor_loading')}
+              </div>
+            ) : cacheBackups.length === 0 ? (
+              <div className="px-3 py-8 text-center text-xs text-slate-500">
+                {t('cache_editor_backups_empty')}
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-[11px]">
+                  <thead className="bg-white/[0.03]">
+                    <tr>
+                      <th className="px-3 py-2 font-bold text-slate-500 uppercase tracking-tight whitespace-nowrap">{t('cache_editor_backup_modified')}</th>
+                      <th className="px-3 py-2 font-bold text-slate-500 uppercase tracking-tight whitespace-nowrap">{t('cache_editor_backup_progress')}</th>
+                      <th className="px-3 py-2 font-bold text-slate-500 uppercase tracking-tight whitespace-nowrap">{t('cache_editor_backup_size')}</th>
+                      <th className="px-3 py-2 font-bold text-slate-500 uppercase tracking-tight">{t('cache_editor_project_path')}</th>
+                      <th className="px-3 py-2 font-bold text-slate-500 uppercase tracking-tight">{t('cache_editor_backup_file')}</th>
+                      <th className="px-3 py-2 font-bold text-slate-500 uppercase tracking-tight text-right whitespace-nowrap">{t('options_label')}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {cacheBackups.map((backup) => (
+                      <tr key={backup.file} className="hover:bg-white/[0.03] transition-colors">
+                        <td className="px-3 py-2 text-slate-300 whitespace-nowrap font-mono">{backup.modified_time}</td>
+                        <td className="px-3 py-2 text-slate-300 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono">{backup.completion_label}</span>
+                            <div className="h-1.5 w-16 rounded-full bg-white/10 overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${elysiaActive ? 'bg-pink-400' : 'bg-cyan-400'}`}
+                                style={{ width: `${Math.min(Math.max(backup.completion_rate, 0), 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{backup.size_label}</td>
+                        <td className="px-3 py-2 text-slate-400 max-w-[180px] truncate" title={backup.project_name}>{backup.project_name}</td>
+                        <td className="px-3 py-2 text-slate-500 max-w-[260px] truncate font-mono" title={backup.file}>{backup.file}</td>
+                        <td className="px-3 py-2 text-right">
+                          <button
+                            onClick={() => restoreCacheBackup(backup)}
+                            disabled={backupRestoring !== null}
+                            className={`px-3 py-1.5 min-h-9 rounded-md text-[11px] font-bold transition-all inline-flex items-center gap-1.5 ${
+                              elysiaActive
+                                ? 'bg-pink-500/15 text-pink-300 hover:bg-pink-500 hover:text-white'
+                                : 'bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500 hover:text-slate-950'
+                            } disabled:opacity-50 disabled:cursor-not-allowed`}
+                          >
+                            {backupRestoring === backup.file ? (
+                              <RefreshCw size={13} className="animate-spin" />
+                            ) : (
+                              <ArchiveRestore size={13} />
+                            )}
+                            {t('cache_editor_backup_restore')}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* AI Proofread Row */}
         <div className="flex gap-4 items-center">
@@ -773,6 +974,9 @@ export const CacheEditor: React.FC = () => {
                   setSearchQuery('');
                   setProjectPath('');
                   setCurrentLine(0);
+                  setCacheBackups([]);
+                  setShowBackups(false);
+                  setBackupMessage(null);
                   // Clear saved state from localStorage and component state
                   localStorage.removeItem(CACHE_EDITOR_STATE_KEY);
                   setSavedState(null);

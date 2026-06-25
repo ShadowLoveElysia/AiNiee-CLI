@@ -420,6 +420,7 @@
     "label_cache_recovery_modified_time": "修改时间",
     "label_cache_recovery_size": "大小",
     "label_cache_recovery_items": "条目",
+    "label_cache_recovery_progress": "进度",
     "label_cache_recovery_project": "项目",
     "label_cache_recovery_file": "文件",
     "prompt_cache_recovery_select": "请选择要恢复的缓存版本",

@@ -1,4 +1,5 @@
 from collections import defaultdict
+import hashlib
 import os
 import re
 import shutil
@@ -36,6 +37,7 @@ class CacheManager(Base):
         self.save_to_file_stop_flag = False
         self.save_to_file_require_flag = False
         self.save_to_file_require_path = ""
+        self._last_backup_digest = ""
 
         self.project = CacheProject()
         self.project.stats_data = CacheProjectStatistics()
@@ -98,6 +100,34 @@ class CacheManager(Base):
         except Exception as e:
             self.warning(f"Final cache flush failed: {e}")
 
+    def _create_cache_backup(self, cache_dir: str, cache_path: str, content_bytes: bytes, config: dict) -> None:
+        digest = hashlib.sha256(content_bytes).hexdigest()
+        if digest == self._last_backup_digest:
+            return
+
+        timestamp = f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}"
+        backup_dir = os.path.join(cache_dir, "backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        backup_path = os.path.join(backup_dir, f"AinieeCacheData_{timestamp}.json")
+        shutil.copy2(cache_path, backup_path)
+        self._last_backup_digest = digest
+
+        try:
+            limit = int(config.get("cache_backup_limit", 10))
+        except (TypeError, ValueError):
+            limit = 10
+
+        if limit > 0:
+            try:
+                backups = sorted(
+                    self._iter_backup_cache_paths_from_dir(backup_dir),
+                    key=os.path.getmtime,
+                )
+                while len(backups) > limit:
+                    os.remove(backups.pop(0))
+            except Exception as e:
+                self.debug(f"Backup rotation failed: {e}")
+
     # 手动保存缓存请求事件
     def on_manual_save_cache_requested(self, event: int, data: dict) -> None:
         """处理手动保存缓存的请求"""
@@ -152,25 +182,7 @@ class CacheManager(Base):
 
                 config = self.load_config()
                 if config.get("enable_cache_backup", False):
-                    # Create timestamped backup
-                    timestamp = f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}"
-                    backup_dir = os.path.join(cache_dir, "backups")
-                    os.makedirs(backup_dir, exist_ok=True)
-                    backup_path = os.path.join(backup_dir, f"AinieeCacheData_{timestamp}.json")
-                    shutil.copy2(path, backup_path)
-                    
-                    # Enforce backup limit
-                    limit = config.get("cache_backup_limit", 10)
-                    if limit > 0:
-                        try:
-                            backups = sorted(
-                                [os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.startswith("AinieeCacheData_")],
-                                key=os.path.getmtime
-                            )
-                            while len(backups) > limit:
-                                os.remove(backups.pop(0))
-                        except Exception as e:
-                            self.debug(f"Backup rotation failed: {e}")
+                    self._create_cache_backup(cache_dir, path, content_bytes, config)
 
                 # 写入项目整体翻译状态文件
                 if self.project and self.project.stats_data:
@@ -249,7 +261,7 @@ class CacheManager(Base):
         self._normalize_project_state()
 
     # 从缓存文件读取数据
-    def load_from_file(self, output_path: str) -> None:
+    def load_from_file(self, output_path: str, interactive_recovery: bool | None = None) -> None:
         """从文件加载数据"""
         path = os.path.join(output_path, "cache", "AinieeCacheData.json")
         with self.file_lock:
@@ -259,6 +271,9 @@ class CacheManager(Base):
                     self._normalize_project_state()
                 except Exception as e:
                     config = self.load_config()
+                    if interactive_recovery is not None:
+                        config = dict(config)
+                        config["interactive_mode"] = bool(interactive_recovery)
                     if config.get("enable_auto_heal", True):
                         self.print(f"[[red]ERROR[/]] {self.tra('msg_cache_corrupted')}")
                         if self._recover_from_backup_cache(output_path, path, config):
@@ -309,6 +324,7 @@ class CacheManager(Base):
                 self.debug(f"Skipping inaccessible cache backup: {backup_path}", e)
                 continue
 
+            progress = self._summarize_project_progress(project)
             candidates.append(
                 {
                     "path": backup_path,
@@ -319,6 +335,10 @@ class CacheManager(Base):
                     "size_label": self._format_file_size(stat.st_size),
                     "project_name": getattr(project, "project_name", "") or "-",
                     "item_count": project.count_items() if project else 0,
+                    "translated_count": progress["translated_count"],
+                    "total_count": progress["total_count"],
+                    "completion_rate": progress["completion_rate"],
+                    "completion_label": progress["completion_label"],
                 }
             )
         return candidates
@@ -327,7 +347,10 @@ class CacheManager(Base):
         backup_dir = os.path.join(output_path, "cache", "backups")
         if not os.path.isdir(backup_dir):
             return []
+        return self._iter_backup_cache_paths_from_dir(backup_dir)
 
+    @staticmethod
+    def _iter_backup_cache_paths_from_dir(backup_dir: str) -> list[str]:
         backups = []
         for filename in os.listdir(backup_dir):
             if not filename.startswith("AinieeCacheData_") or not filename.endswith(".json"):
@@ -336,6 +359,28 @@ class CacheManager(Base):
             if os.path.isfile(path):
                 backups.append(path)
         return sorted(backups, key=os.path.getmtime, reverse=True)
+
+    def _summarize_project_progress(self, project: CacheProject) -> dict[str, Any]:
+        total_count = project.count_items() if project else 0
+        translated_count = 0
+        if project:
+            translated_count = sum(
+                1
+                for item in project.items_iter()
+                if item.translation_status in {
+                    TranslationStatus.TRANSLATED,
+                    TranslationStatus.POLISHED,
+                    TranslationStatus.USER_PROOFREAD,
+                    TranslationStatus.AI_PROOFREAD,
+                }
+            )
+        completion_rate = (translated_count / total_count * 100) if total_count else 0.0
+        return {
+            "translated_count": translated_count,
+            "total_count": total_count,
+            "completion_rate": completion_rate,
+            "completion_label": f"{translated_count}/{total_count} ({completion_rate:.1f}%)",
+        }
 
     def _should_prompt_for_cache_recovery(self, config: dict) -> bool:
         if not config.get("interactive_mode", True):
@@ -357,7 +402,7 @@ class CacheManager(Base):
         table.add_column(self.tra("label_cache_recovery_id"), justify="right", no_wrap=True)
         table.add_column(self.tra("label_cache_recovery_modified_time"), no_wrap=True)
         table.add_column(self.tra("label_cache_recovery_size"), justify="right", no_wrap=True)
-        table.add_column(self.tra("label_cache_recovery_items"), justify="right", no_wrap=True)
+        table.add_column(self.tra("label_cache_recovery_progress"), justify="right", no_wrap=True)
         table.add_column(self.tra("label_cache_recovery_project"))
         table.add_column(self.tra("label_cache_recovery_file"))
 
@@ -366,7 +411,7 @@ class CacheManager(Base):
                 str(index),
                 candidate["modified_time"],
                 candidate["size_label"],
-                str(candidate["item_count"]),
+                candidate["completion_label"],
                 str(candidate["project_name"]),
                 os.path.basename(candidate["path"]),
             )

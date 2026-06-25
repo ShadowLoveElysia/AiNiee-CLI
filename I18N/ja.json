@@ -349,6 +349,7 @@
     "label_cache_recovery_modified_time": "更新日時",
     "label_cache_recovery_size": "サイズ",
     "label_cache_recovery_items": "項目",
+    "label_cache_recovery_progress": "進捗",
     "label_cache_recovery_project": "プロジェクト",
     "label_cache_recovery_file": "ファイル",
     "prompt_cache_recovery_select": "回復するキャッシュバージョンを選択してください",

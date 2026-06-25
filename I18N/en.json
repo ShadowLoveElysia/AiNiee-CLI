@@ -356,6 +356,7 @@
     "label_cache_recovery_modified_time": "Modified",
     "label_cache_recovery_size": "Size",
     "label_cache_recovery_items": "Items",
+    "label_cache_recovery_progress": "Progress",
     "label_cache_recovery_project": "Project",
     "label_cache_recovery_file": "File",
     "prompt_cache_recovery_select": "Select the cache version to restore",
