@@ -61,6 +61,7 @@
     "polishing_mode_selection": "translated_text_polish",
     "polishing_pre_line_counts": 2,
     "cache_backup_limit": 10,
+    "cache_save_interval": 8,
     "enable_cache_backup": true,
     "enable_auto_restore_ebook": true,
     "enable_dry_run": false,
@@ -738,6 +739,7 @@
         }
     },
     "interface_language": "",
+    "cache_save_interval": 8,
     "enable_cache_backup": true,
     "enable_auto_restore_ebook": true,
     "enable_dry_run": false,

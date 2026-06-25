@@ -396,6 +396,17 @@ register_config(ConfigItem(
 ))
 
 register_config(ConfigItem(
+    key="cache_save_interval",
+    default=8,
+    level=ConfigLevel.USER,
+    config_type=ConfigType.INT,
+    i18n_key="setting_cache_save_interval",
+    min_value=1,
+    max_value=3600,
+    category="feature"
+))
+
+register_config(ConfigItem(
     key="cache_backup_limit",
     default=10,
     level=ConfigLevel.USER,

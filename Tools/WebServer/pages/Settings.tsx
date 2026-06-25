@@ -1151,6 +1151,19 @@ export const Settings: React.FC = () => {
              <Toggle field="response_conversion_toggle" label={t('setting_response_conversion_toggle')} />
              <Toggle field="enable_context_enhancement" label={t('setting_enable_context_enhancement')} desc={t('setting_enable_context_enhancement_desc')} />
 
+             <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-400 uppercase">{t('setting_cache_save_interval')}</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={3600}
+                  value={config.cache_save_interval ?? 8}
+                  onChange={(e) => handleChange('cache_save_interval', Math.min(Math.max(parseInt(e.target.value) || 8, 1), 3600))}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:border-primary text-sm"
+                />
+                <p className="text-xs text-slate-500">{t('setting_cache_save_interval_desc')}</p>
+             </div>
+
              {config.enable_rate_limit && (
                <div className="col-span-1 md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-slate-900/30 border border-slate-700 rounded-lg">
                  <div className="space-y-2">

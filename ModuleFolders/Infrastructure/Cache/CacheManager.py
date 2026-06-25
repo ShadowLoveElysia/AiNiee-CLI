@@ -1,10 +1,12 @@
 from collections import defaultdict
 import os
 import re
+import shutil
+import sys
 import threading
 import time
 from dataclasses import fields
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import msgspec
 import rapidjson as json
@@ -21,6 +23,8 @@ from ModuleFolders.Infrastructure.Cache.CacheProject import (
 
 class CacheManager(Base):
     SAVE_INTERVAL = 8  # 缓存保存间隔（秒）
+    MIN_SAVE_INTERVAL = 1
+    MAX_SAVE_INTERVAL = 3600
 
     def __init__(self) -> None:
         super().__init__()
@@ -131,16 +135,13 @@ class CacheManager(Base):
                 # 要么读到旧的完整文件，要么读到新的完整文件，绝不会读到一半。
                 os.replace(tmp_path, path)
 
-                # --- NEW: Optional Backup Logic ---
                 config = self.load_config()
                 if config.get("enable_cache_backup", False):
                     # Create timestamped backup
-                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    timestamp = f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}"
                     backup_dir = os.path.join(cache_dir, "backups")
                     os.makedirs(backup_dir, exist_ok=True)
                     backup_path = os.path.join(backup_dir, f"AinieeCacheData_{timestamp}.json")
-                    
-                    import shutil
                     shutil.copy2(path, backup_path)
                     
                     # Enforce backup limit
@@ -155,7 +156,6 @@ class CacheManager(Base):
                                 os.remove(backups.pop(0))
                         except Exception as e:
                             self.debug(f"Backup rotation failed: {e}")
-                # --- END Backup Logic ---
 
                 # 写入项目整体翻译状态文件
                 if self.project and self.project.stats_data:
@@ -189,8 +189,16 @@ class CacheManager(Base):
     def save_to_file_tick(self) -> None:
         """定时保存任务"""
         while not self.save_to_file_stop_flag:
-            time.sleep(self.SAVE_INTERVAL)
+            time.sleep(self._get_save_interval())
             self.flush_pending_save()
+
+    def _get_save_interval(self) -> int:
+        config = self.load_config()
+        try:
+            interval = int(config.get("cache_save_interval", self.SAVE_INTERVAL))
+        except (TypeError, ValueError):
+            interval = self.SAVE_INTERVAL
+        return min(max(interval, self.MIN_SAVE_INTERVAL), self.MAX_SAVE_INTERVAL)
 
     # 请求保存缓存到文件
     def require_save_to_file(self, output_path: str) -> None:
@@ -223,28 +231,148 @@ class CacheManager(Base):
                     self.project = self.read_from_file(path)
                     self._normalize_project_state()
                 except Exception as e:
-                    # Auto-Heal logic
                     config = self.load_config()
                     if config.get("enable_auto_heal", True):
                         self.print(f"[[red]ERROR[/]] {self.tra('msg_cache_corrupted')}")
-                        backup_dir = os.path.join(output_path, "cache", "backups")
-                        if os.path.exists(backup_dir):
-                            # Find newest backup
-                            backups = sorted([os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.startswith("AinieeCacheData_")], 
-                                            key=lambda x: os.path.getmtime(x), reverse=True)
-                            for b_path in backups:
-                                try:
-                                    self.project = self.read_from_file(b_path)
-                                    self._normalize_project_state()
-                                    self.print(f"[[green]SUCCESS[/]] {self.tra('msg_cache_healed').format(os.path.basename(b_path))}")
-                                    # Copy healed backup to main path
-                                    import shutil
-                                    shutil.copy2(b_path, path)
-                                    return
-                                except:
-                                    continue
+                        if self._recover_from_backup_cache(output_path, path, config):
+                            return
                         self.print(f"[[red]CRITICAL[/]] {self.tra('msg_cache_heal_fail')}")
                     raise e
+
+    def _recover_from_backup_cache(self, output_path: str, main_cache_path: str, config: dict) -> bool:
+        candidates = self._collect_valid_backup_caches(output_path)
+        if not candidates:
+            return False
+
+        should_prompt = self._should_prompt_for_cache_recovery(config)
+        selected = None
+        if should_prompt:
+            selected = self._select_backup_cache_interactively(candidates)
+            if selected is None:
+                return False
+        if selected is None:
+            selected = candidates[0]
+            if not should_prompt:
+                self.print(
+                    f"[[yellow]INFO[/]] "
+                    f"{self.tra('msg_cache_recovery_auto_selected').format(os.path.basename(selected['path']))}"
+                )
+
+        if selected is None:
+            return False
+
+        self.project = selected["project"]
+        self._normalize_project_state()
+        shutil.copy2(selected["path"], main_cache_path)
+        self.print(f"[[green]SUCCESS[/]] {self.tra('msg_cache_healed').format(os.path.basename(selected['path']))}")
+        return True
+
+    def _collect_valid_backup_caches(self, output_path: str) -> list[dict[str, Any]]:
+        candidates = []
+        for backup_path in self._iter_backup_cache_paths(output_path):
+            try:
+                project = self.read_from_file(backup_path)
+            except Exception as e:
+                self.debug(f"Skipping invalid cache backup: {backup_path}", e)
+                continue
+
+            try:
+                stat = os.stat(backup_path)
+            except OSError as e:
+                self.debug(f"Skipping inaccessible cache backup: {backup_path}", e)
+                continue
+
+            candidates.append(
+                {
+                    "path": backup_path,
+                    "project": project,
+                    "mtime": stat.st_mtime,
+                    "modified_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
+                    "size": stat.st_size,
+                    "size_label": self._format_file_size(stat.st_size),
+                    "project_name": getattr(project, "project_name", "") or "-",
+                    "item_count": project.count_items() if project else 0,
+                }
+            )
+        return candidates
+
+    def _iter_backup_cache_paths(self, output_path: str) -> list[str]:
+        backup_dir = os.path.join(output_path, "cache", "backups")
+        if not os.path.isdir(backup_dir):
+            return []
+
+        backups = []
+        for filename in os.listdir(backup_dir):
+            if not filename.startswith("AinieeCacheData_") or not filename.endswith(".json"):
+                continue
+            path = os.path.join(backup_dir, filename)
+            if os.path.isfile(path):
+                backups.append(path)
+        return sorted(backups, key=os.path.getmtime, reverse=True)
+
+    def _should_prompt_for_cache_recovery(self, config: dict) -> bool:
+        if not config.get("interactive_mode", True):
+            return False
+        if Base.should_suppress_task_output():
+            return False
+        return bool(getattr(sys.stdin, "isatty", lambda: False)())
+
+    def _select_backup_cache_interactively(self, candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+        try:
+            from rich.console import Group
+            from rich.panel import Panel
+            from rich.prompt import IntPrompt
+            from rich.table import Table
+        except Exception:
+            return None
+
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column(self.tra("label_cache_recovery_id"), justify="right", no_wrap=True)
+        table.add_column(self.tra("label_cache_recovery_modified_time"), no_wrap=True)
+        table.add_column(self.tra("label_cache_recovery_size"), justify="right", no_wrap=True)
+        table.add_column(self.tra("label_cache_recovery_items"), justify="right", no_wrap=True)
+        table.add_column(self.tra("label_cache_recovery_project"))
+        table.add_column(self.tra("label_cache_recovery_file"))
+
+        for index, candidate in enumerate(candidates, start=1):
+            table.add_row(
+                str(index),
+                candidate["modified_time"],
+                candidate["size_label"],
+                str(candidate["item_count"]),
+                str(candidate["project_name"]),
+                os.path.basename(candidate["path"]),
+            )
+
+        panel = Panel(
+            Group(self.tra("msg_cache_recovery_select_hint"), table),
+            title=self.tra("msg_cache_recovery_select_title"),
+            border_style="yellow",
+        )
+        self.print(panel)
+
+        choices = [str(index) for index in range(0, len(candidates) + 1)]
+        choice = IntPrompt.ask(
+            self.tra("prompt_cache_recovery_select"),
+            choices=choices,
+            default=1,
+            show_choices=False,
+        )
+        if choice == 0:
+            self.print(f"[[yellow]WARNING[/]] {self.tra('msg_cache_recovery_cancelled')}")
+            return None
+        return candidates[choice - 1]
+
+    @staticmethod
+    def _format_file_size(size: int) -> str:
+        units = ("B", "KB", "MB", "GB")
+        value = float(size)
+        for unit in units:
+            if value < 1024 or unit == units[-1]:
+                if unit == "B":
+                    return f"{int(value)} {unit}"
+                return f"{value:.1f} {unit}"
+            value /= 1024
 
     def _normalize_project_state(self) -> None:
         if not self.project:

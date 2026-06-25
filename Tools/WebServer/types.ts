@@ -339,6 +339,7 @@ export interface AppConfig {
   interface_language: string;
   enable_github_promotion: boolean;
   enable_cache_backup: boolean;
+  cache_save_interval: number;
   enable_auto_restore_ebook: boolean;
   enable_xlsx_conversion: boolean;
   enable_dry_run: boolean;

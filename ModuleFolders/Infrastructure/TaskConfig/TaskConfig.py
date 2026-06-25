@@ -151,6 +151,7 @@ class TaskConfig(Base):
         self.polishing_mode_selection = "translated_text_polish" # NEW: 润色模式选择
         self.polishing_pre_line_counts = 2 # NEW: 润色时获取上文的行数
         self.cache_backup_limit = 10
+        self.cache_save_interval = 8
         self.enable_cache_backup = True
         self.enable_auto_restore_ebook = True
         self.japanese_text_quote_style_switch = True
