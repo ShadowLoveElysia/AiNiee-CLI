@@ -2404,6 +2404,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   enable_cache_backup: true,
   cache_save_interval: 8,
   enable_auto_restore_ebook: true,
+  enable_xlsx_conversion: false,
   enable_dry_run: false,
   unlocked_themes: ['default'],
   temp_file_limit: 10,

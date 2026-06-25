@@ -42,6 +42,8 @@ class CacheManager(Base):
 
         # 注册事件
         self.subscribe(Base.EVENT.TASK_START, self.start_interval_saving)
+        self.subscribe(Base.EVENT.TASK_COMPLETED, self.on_task_finished)
+        self.subscribe(Base.EVENT.TASK_STOP_DONE, self.on_task_finished)
         self.subscribe(Base.EVENT.APP_SHUT_DOWN, self.app_shut_down)
         self.subscribe(Base.EVENT.TASK_MANUAL_SAVE_CACHE, self.on_manual_save_cache_requested)
         
@@ -82,6 +84,19 @@ class CacheManager(Base):
     def app_shut_down(self, event: int, data: dict) -> None:
         self.save_to_file_stop_flag = True
         self.flush_pending_save()
+
+    def on_task_finished(self, event: int, data: dict) -> None:
+        self.save_to_file_stop_flag = True
+        output_path = data.get("session_output_path") if isinstance(data, dict) else ""
+        if not output_path:
+            output_path = self.save_to_file_require_path
+        if output_path:
+            self.save_to_file_require_path = output_path
+            self.save_to_file_require_flag = True
+        try:
+            self.flush_pending_save()
+        except Exception as e:
+            self.warning(f"Final cache flush failed: {e}")
 
     # 手动保存缓存请求事件
     def on_manual_save_cache_requested(self, event: int, data: dict) -> None:
@@ -190,10 +205,17 @@ class CacheManager(Base):
         """定时保存任务"""
         while not self.save_to_file_stop_flag:
             time.sleep(self._get_save_interval())
-            self.flush_pending_save()
+            try:
+                self.flush_pending_save()
+            except Exception as e:
+                self.warning(f"Periodic cache save failed: {e}")
 
     def _get_save_interval(self) -> int:
-        config = self.load_config()
+        try:
+            config = self.load_config()
+        except Exception as e:
+            self.debug("Failed to load cache save interval config", e)
+            return self.SAVE_INTERVAL
         try:
             interval = int(config.get("cache_save_interval", self.SAVE_INTERVAL))
         except (TypeError, ValueError):
@@ -213,8 +235,13 @@ class CacheManager(Base):
             return
         if not getattr(self, "save_to_file_require_path", ""):
             return
-        self.save_to_file()
-        self.save_to_file_require_flag = False
+        try:
+            self.save_to_file()
+        except Exception:
+            self.save_to_file_require_flag = True
+            raise
+        else:
+            self.save_to_file_require_flag = False
 
     # 从项目中加载
     def load_from_project(self, data: CacheProject):

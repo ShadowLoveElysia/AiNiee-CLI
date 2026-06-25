@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Play, Settings, FileOutput, ArrowRight, FileText, Folder } from 'lucide-react';
 import { useI18n } from '../contexts/I18nContext';
 import { useGlobal } from '../contexts/GlobalContext';
+import { DataService } from '../services/DataService';
 
 export const Dashboard: React.FC = () => {
   const { t } = useI18n();

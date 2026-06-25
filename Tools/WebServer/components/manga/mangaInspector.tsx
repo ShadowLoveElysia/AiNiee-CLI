@@ -374,12 +374,15 @@ export const MangaInspector: React.FC<MangaInspectorProps> = ({
     .filter((pkg) => !pkg.available);
   const selectedRuntimeStage = runtimeValidation?.stages.find((stage) => stage.stage === activeRuntimeStage) || runtimeValidation?.stages[0] || null;
   const selectedStageArtifacts = useMemo(() => (
-    Object.entries(selectedRuntimeStage?.artifacts || {}).map(([key, path]) => ({
+    Object.entries(selectedRuntimeStage?.artifacts || {}).map(([key, value]) => {
+      const path = typeof value === 'string' ? value : '';
+      return {
       key,
       path,
       url: selectedRuntimeStage?.artifact_urls?.[key] || '',
       isImage: isImageArtifact(path),
-    }))
+      };
+    })
   ), [selectedRuntimeStage]);
   const [activeArtifactKey, setActiveArtifactKey] = useState('');
   const activeArtifact = selectedStageArtifacts.find((artifact) => artifact.key === activeArtifactKey) || selectedStageArtifacts[0] || null;

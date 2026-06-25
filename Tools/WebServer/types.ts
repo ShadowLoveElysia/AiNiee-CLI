@@ -273,12 +273,17 @@ export interface AppConfig {
   round_limit: number;
   enable_smart_round_limit: boolean;
   smart_round_limit_multiplier: number;
+  enable_rate_limit?: boolean;
+  custom_rpm_limit?: number;
+  custom_tpm_limit?: number;
   
   // --- Processing ---
   enable_fast_translate: boolean;
   enable_line_breaks: boolean;
   line_breaks_style: number;
   response_conversion_toggle: boolean;
+  enable_context_enhancement?: boolean;
+  translation_consistency_enhancement?: boolean;
   opencc_preset: string;
   
   // --- Limits ---
@@ -343,6 +348,9 @@ export interface AppConfig {
   enable_auto_restore_ebook: boolean;
   enable_xlsx_conversion: boolean;
   enable_dry_run: boolean;
+  enable_auto_proofread?: boolean;
+  temp_file_limit?: number;
+  cache_editor_page_size?: number;
   unlocked_themes?: string[]; // Persist unlocked themes
   response_check_switch: {
     newline_character_count_check: boolean;
