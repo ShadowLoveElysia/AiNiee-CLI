@@ -3129,8 +3129,37 @@ async def load_cache(request: CacheLoadRequest):
                         detail=f"Cache file not found: {cache_file_to_check}. Permission denied accessing cache directory."
                     )
 
-        # Load cache data - CacheManager expects output_path, not the full cache file path
-        cache_manager.load_from_file(output_path)
+        # Load the main cache directly. Web users choose backups in the UI; the load
+        # endpoint must not auto-heal because that would overwrite the user's choice.
+        try:
+            project = cache_manager.read_from_file(cache_file_to_check)
+        except Exception as cache_error:
+            candidates = cache_manager._collect_valid_backup_caches(output_path)
+            if candidates:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Cache file is corrupted. Select a backup to restore.",
+                        "backups": [
+                            {
+                                "file": os.path.basename(candidate["path"]),
+                                "modified_time": candidate["modified_time"],
+                                "size": candidate["size"],
+                                "size_label": candidate["size_label"],
+                                "project_name": candidate["project_name"],
+                                "item_count": candidate["item_count"],
+                                "translated_count": candidate["translated_count"],
+                                "total_count": candidate["total_count"],
+                                "completion_rate": candidate["completion_rate"],
+                                "completion_label": candidate["completion_label"],
+                            }
+                            for candidate in candidates
+                        ],
+                    },
+                ) from cache_error
+            raise
+        else:
+            cache_manager.load_from_project(project)
 
         if not hasattr(cache_manager, 'project') or not cache_manager.project.files:
             raise HTTPException(status_code=500, detail="Failed to load cache data")

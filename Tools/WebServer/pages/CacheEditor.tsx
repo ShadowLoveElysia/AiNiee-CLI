@@ -246,7 +246,11 @@ export const CacheEditor: React.FC = () => {
           // Small delay to ensure state is set, then try to load
           setTimeout(async () => {
             try {
-              await loadCacheFromSavedPath(currentSavedState.projectPath);
+              const restoreResult = await loadCacheFromSavedPath(currentSavedState.projectPath);
+              if (restoreResult?.needsBackupRestore) {
+                setSavedState(currentSavedState);
+                return;
+              }
               // Update component state with the restored saved state
               setSavedState(currentSavedState);
               if (currentSavedState.currentPage) setCurrentPage(currentSavedState.currentPage);
@@ -332,6 +336,13 @@ export const CacheEditor: React.FC = () => {
 
       if (!response.ok) {
         const errorData = await response.json();
+        if (response.status === 409) {
+          const detail = errorData.detail || {};
+          setCacheBackups(detail.backups || []);
+          setShowBackups(true);
+          setBackupMessage(t('cache_editor_backup_select_after_corruption'));
+          return;
+        }
         throw new Error(errorData.detail || t('cache_editor_failed_load_cache'));
       }
 
@@ -358,11 +369,20 @@ export const CacheEditor: React.FC = () => {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      if (response.status === 409) {
+        const detail = errorData.detail || {};
+        setCacheBackups(typeof detail === 'object' ? detail.backups || [] : []);
+        setShowBackups(true);
+        setBackupMessage(t('cache_editor_backup_select_after_corruption'));
+        setError(null);
+        return { needsBackupRestore: true };
+      }
       throw new Error(errorData.detail || 'Failed to load cache from saved path');
     }
 
     await checkCacheStatus(); // Refresh status
     console.log('Cache restored from saved path:', path);
+    return { needsBackupRestore: false };
   };
 
   const loadCacheBackups = async (path = projectPath) => {
@@ -427,7 +447,9 @@ export const CacheEditor: React.FC = () => {
       await checkCacheStatus();
       setCurrentPage(1);
       await loadCacheItems(1);
-      await loadCacheBackups(projectPath);
+      setShowBackups(false);
+      setCacheBackups([]);
+      setError(null);
       setBackupMessage(t('cache_editor_backup_restored', backup.file));
     } catch (err) {
       setError(err instanceof Error ? err.message : t('cache_editor_backup_restore_failed'));
