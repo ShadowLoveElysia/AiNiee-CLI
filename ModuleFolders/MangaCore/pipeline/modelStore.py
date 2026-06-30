@@ -52,6 +52,32 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^a-z0-9._-]+", "-", value.lower()).strip("-") or "model"
 
 
+def _quarantine_corrupt_json(path: Path) -> None:
+    if not path.exists():
+        return
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    quarantine_path = path.with_name(f"{path.name}.corrupt-{timestamp}")
+    suffix = 1
+    while quarantine_path.exists():
+        quarantine_path = path.with_name(f"{path.name}.corrupt-{timestamp}-{suffix}")
+        suffix += 1
+    try:
+        path.replace(quarantine_path)
+    except OSError:
+        return
+
+
+def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.tmp")
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_path, path)
+
+
 def _ensure_huggingface_endpoint() -> str:
     endpoint = (os.environ.get("HF_ENDPOINT") or _DEFAULT_HF_ENDPOINT).rstrip("/")
     os.environ["HF_ENDPOINT"] = endpoint
@@ -480,16 +506,17 @@ class MangaModelStore:
         path = self.registry_path(model_id)
         if not path.exists():
             return {}
-        with open(path, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            _quarantine_corrupt_json(path)
+            return {}
         return payload if isinstance(payload, dict) else {}
 
     def _write_record(self, model_id: str, payload: dict[str, object]) -> None:
         path = self.registry_path(model_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
+        _atomic_write_json(path, payload)
 
 
 def build_engine_status(config_snapshot: dict[str, object] | None = None) -> dict[str, object]:

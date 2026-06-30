@@ -98,8 +98,8 @@ def _ensure_huggingface_endpoint() -> str:
     return endpoint
 
 
-def _resolve_download_url(url: str) -> str:
-    endpoint = _ensure_huggingface_endpoint()
+def _rewrite_huggingface_url(url: str, endpoint: str) -> str:
+    endpoint = endpoint.rstrip("/")
     origin = HF_RESOLVE.rstrip("/")
     if url == origin:
         return endpoint
@@ -107,6 +107,24 @@ def _resolve_download_url(url: str) -> str:
     if url.startswith(prefix):
         return f"{endpoint}/{url[len(prefix):]}"
     return url
+
+
+def _resolve_download_urls(url: str) -> tuple[str, ...]:
+    endpoint = _ensure_huggingface_endpoint()
+    origin = HF_RESOLVE.rstrip("/")
+    if url != origin and not url.startswith(f"{origin}/"):
+        return (url,)
+
+    candidates: list[str] = []
+    for candidate_endpoint in (endpoint, DEFAULT_HF_ENDPOINT, origin):
+        candidate = _rewrite_huggingface_url(url, candidate_endpoint)
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return tuple(candidates)
+
+
+def _resolve_download_url(url: str) -> str:
+    return _resolve_download_urls(url)[0]
 
 
 ASSETS: tuple[DownloadAsset, ...] = (
@@ -738,6 +756,17 @@ def _is_file_ready(path: Path, expected_sha256: str = "") -> bool:
     return True
 
 
+def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.tmp")
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_path, path)
+
+
 def _archive_targets(root_dir: Path, asset: DownloadAsset) -> list[Path]:
     return [root_dir / member.destination for member in asset.archive_members]
 
@@ -882,14 +911,19 @@ def _download_file(
     partial_path = destination.with_name(f"{destination.name}.part")
     last_error: Exception | None = None
 
-    for index, raw_url in enumerate(asset.urls, start=1):
-        url = _resolve_download_url(raw_url)
+    download_urls = tuple(
+        candidate
+        for raw_url in asset.urls
+        for candidate in _resolve_download_urls(raw_url)
+    )
+
+    for index, url in enumerate(download_urls, start=1):
         try:
             if index > 1:
                 if display is not None and display.handles_events:
-                    display.set_status(f"Retrying fallback URL {index}/{len(asset.urls)}", url=url)
+                    display.set_status(f"Retrying fallback URL {index}/{len(download_urls)}", url=url)
                 else:
-                    _print(f"[RETRY] {asset.asset_id}: fallback URL {index}/{len(asset.urls)}", style="yellow")
+                    _print(f"[RETRY] {asset.asset_id}: fallback URL {index}/{len(download_urls)}", style="yellow")
             _cleanup_partial(destination)
             if display is None or not display.handles_events:
                 _print(f"[GET] {asset.asset_id}: {url}", style="cyan")
@@ -916,7 +950,7 @@ def _download_file(
         except Exception as exc:
             last_error = exc
             _cleanup_partial(destination)
-            if index < len(asset.urls):
+            if index < len(download_urls):
                 if display is not None and display.handles_events:
                     display.set_status(f"Download failed, switching URL: {exc}")
                 else:
@@ -1277,7 +1311,6 @@ def _register_model(root_dir: Path, model_id: str, asset_ids: Iterable[str], *, 
     storage_rel = MODEL_STORAGE_DIRS.get(model_id, "")
     storage_path = (root_dir / storage_rel) if storage_rel else root_dir
     registry_path = _registry_path(root_dir, model_id)
-    registry_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "model_id": package.model_id,
         "repo_id": package.repo_id,
@@ -1286,9 +1319,7 @@ def _register_model(root_dir: Path, model_id: str, asset_ids: Iterable[str], *, 
         "downloaded_at": _now_iso(),
         "revision": f"requests:{','.join(asset_ids)}",
     }
-    with open(registry_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
+    _atomic_write_json(registry_path, payload)
     if not quiet:
         _print(f"[REGISTRY] {model_id} -> {registry_path}", style="green")
 
