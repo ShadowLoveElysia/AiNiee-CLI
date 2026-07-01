@@ -257,6 +257,7 @@ export interface AppConfig {
   target_language: string;
   
   translation_project: string;
+  polishing_mode_selection?: 'translated_text_polish' | 'source_text_polish';
   manga_ocr_engine?: string;
   manga_detect_engine?: string;
   manga_segment_engine?: string;

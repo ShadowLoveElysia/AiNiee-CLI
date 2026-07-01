@@ -11,6 +11,11 @@ from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any, Optional, Callable
 
+from ModuleFolders.Infrastructure.TaskConfig.PolishingMode import (
+    POLISH_TRANSLATED_TEXT,
+    POLISHING_MODE_CHOICES,
+)
+
 
 class ConfigLevel(Enum):
     """配置层级"""
@@ -245,6 +250,17 @@ register_config(ConfigItem(
     i18n_key="setting_pre_line_counts",
     min_value=0,
     max_value=10,
+    category="translation"
+))
+
+register_config(ConfigItem(
+    key="polishing_mode_selection",
+    default=POLISH_TRANSLATED_TEXT,
+    level=ConfigLevel.USER,
+    config_type=ConfigType.CHOICE,
+    i18n_key="setting_polishing_mode_selection",
+    i18n_desc_key="setting_polishing_mode_selection_desc",
+    choices=POLISHING_MODE_CHOICES,
     category="translation"
 ))
 

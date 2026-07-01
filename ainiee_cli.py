@@ -54,6 +54,12 @@ from ModuleFolders.Infrastructure.TaskConfig.ConfigProfileService import (
     save_effective_config,
     save_root_config,
 )
+from ModuleFolders.Infrastructure.TaskConfig.PolishingMode import (
+    POLISH_SOURCE_TEXT,
+    POLISH_TRANSLATED_TEXT,
+    normalize_polishing_mode,
+    polishing_mode_i18n_key,
+)
 
 
 
@@ -88,6 +94,7 @@ class CLIMenu:
         self._crash_handler = None
         self._web_runtime_bridge = None
         self._mcp_runtime_bridge = None
+        self.runtime_config_overrides = {}
         self._command_mode_runner = None
         self._export_flow = None
         self._profile_menu_handler = None
@@ -1162,6 +1169,49 @@ class CLIMenu:
                 return True
         return bool(self.config.get("world_building_history") or self.config.get("writing_style_history"))
 
+    def _polishing_mode_label(self, mode):
+        mode = normalize_polishing_mode(mode)
+        key = polishing_mode_i18n_key(mode)
+        value = self._i18n_text(key, key)
+        return value if value != key else mode
+
+    def _select_polishing_mode(self):
+        current_mode = normalize_polishing_mode(self.config.get("polishing_mode_selection"))
+        options = [
+            (POLISH_TRANSLATED_TEXT, "prompt_polishing_mode_translated_hint"),
+            (POLISH_SOURCE_TEXT, "prompt_polishing_mode_source_hint"),
+        ]
+
+        table = Table(show_header=False, box=None)
+        for index, (mode, hint_key) in enumerate(options, 1):
+            marker = "[green]●[/green]" if mode == current_mode else " "
+            table.add_row(
+                f"[cyan]{index}.[/cyan]",
+                self._polishing_mode_label(mode),
+                f"[dim]{self._i18n_text(hint_key, '')}[/dim]",
+                marker,
+            )
+        console.print(
+            Panel(
+                table,
+                title=f"[bold]{self._i18n_text('prompt_polishing_mode_select', 'Select polishing mode')}[/bold]",
+                expand=False,
+            )
+        )
+        choice = IntPrompt.ask(
+            self._i18n_text("prompt_select", "Select"),
+            choices=["1", "2"],
+            default=1 if current_mode == POLISH_TRANSLATED_TEXT else 2,
+            show_choices=False,
+        )
+        selected_mode = options[choice - 1][0]
+        self.config["polishing_mode_selection"] = selected_mode
+        self.save_config()
+        console.print(
+            f"[cyan]{self._i18n_text('label_polishing_mode', 'Polishing Mode')}: "
+            f"{self._polishing_mode_label(selected_mode)}[/cyan]"
+        )
+
     def run_task(self, task_mode, target_path=None, continue_status=False, non_interactive=False, web_mode=False, from_queue=False, skip_prompt_validation=False, save_runtime_config=True, skip_preflight=False, automation_progress=False):
         # 如果是非交互模式，直接跳过菜单
         if target_path is None:
@@ -1260,6 +1310,9 @@ class CLIMenu:
 
             if not target_path:
                 return False
+
+            if task_mode == TaskType.POLISH:
+                self._select_polishing_mode()
 
         # Smart suggestion for folders
         if os.path.isdir(target_path):
@@ -1459,6 +1512,9 @@ class CLIMenu:
 
         # 确保 TaskExecutor 的配置与 CLIMenu 的配置同步
         self.task_executor.config.load_config_from_dict(self.config)
+        runtime_overrides = getattr(self, "runtime_config_overrides", {})
+        if isinstance(runtime_overrides, dict) and runtime_overrides:
+            self.task_executor.config.load_config_from_dict(runtime_overrides)
 
         if self.input_listener.disabled and not web_mode and not automation_progress:
             self.ui.log("[bold yellow]Warning: Keyboard listener failed to initialize (no TTY found). Hotkeys will be disabled.[/bold yellow]")
@@ -2408,6 +2464,11 @@ def main():
     parser.add_argument('--retry', type=int, help="Max retry counts for failed requests")
     parser.add_argument('--rounds', type=int, help="Max execution rounds")
     parser.add_argument('--timeout', type=int, help="Request timeout in seconds")
+    parser.add_argument(
+        '--polish-mode',
+        choices=['translated', 'source', 'translated_text_polish', 'source_text_polish'],
+        help="Polishing mode for this run only: translated polishes existing translations; source polishes source text.",
+    )
 
     # API 与模型配置
     parser.add_argument('--platform', help="Target platform (e.g., Openai, LocalLLM, sakura)")

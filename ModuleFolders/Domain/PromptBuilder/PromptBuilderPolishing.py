@@ -2,6 +2,10 @@ from types import SimpleNamespace
 
 from ModuleFolders.Base.Base import Base
 from ModuleFolders.Infrastructure.TaskConfig.TaskConfig import TaskConfig
+from ModuleFolders.Infrastructure.TaskConfig.PolishingMode import (
+    POLISH_SOURCE_TEXT,
+    POLISH_TRANSLATED_TEXT,
+)
 from ModuleFolders.Domain.PromptBuilder.PromptBuilderEnum import PromptBuilderEnum
 from ModuleFolders.Domain.PromptBuilder.PromptBuilder import PromptBuilder
 from ModuleFolders.Domain.PromptBuilder.DynamicGlossary import (
@@ -9,6 +13,17 @@ from ModuleFolders.Domain.PromptBuilder.DynamicGlossary import (
     filter_legacy_references_for_prompt,
 )
 class PromptBuilderPolishing(Base):
+    BUILTIN_COMMON_PROMPT_IDS = {
+        PromptBuilderEnum.POLISH_COMMON,
+        str(PromptBuilderEnum.POLISH_COMMON),
+        "POLISH_COMMON",
+        "polish_common",
+        "common",
+        "common_system_zh_s",
+        "common_system_zh_t",
+        "common_system_zh_s.txt",
+        "common_system_zh_t.txt",
+    }
 
     def __init__(self) -> None:
         super().__init__()
@@ -34,9 +49,9 @@ class PromptBuilderPolishing(Base):
         # 构造结果
         if config == None:
             result = PromptBuilderPolishing.common_system_zh_t
-        elif  config.polishing_mode_selection == "source_text_polish":
+        elif  config.polishing_mode_selection == POLISH_SOURCE_TEXT:
             result = PromptBuilderPolishing.common_system_zh_s
-        elif  config.polishing_mode_selection == "translated_text_polish":
+        elif  config.polishing_mode_selection == POLISH_TRANSLATED_TEXT:
             result = PromptBuilderPolishing.common_system_zh_t
         else:
             result = PromptBuilderPolishing.common_system_zh_t
@@ -52,9 +67,9 @@ class PromptBuilderPolishing(Base):
         # 构造结果
         if config == None:
             result = PromptBuilderPolishing.common_system_zh_t
-        elif  config.polishing_mode_selection == "source_text_polish":
+        elif  config.polishing_mode_selection == POLISH_SOURCE_TEXT:
             result = PromptBuilderPolishing.common_system_zh_s
-        elif  config.polishing_mode_selection == "translated_text_polish":
+        elif  config.polishing_mode_selection == POLISH_TRANSLATED_TEXT:
             result = PromptBuilderPolishing.common_system_zh_t
         else:
             result = PromptBuilderPolishing.common_system_zh_t
@@ -234,7 +249,8 @@ class PromptBuilderPolishing(Base):
         extra_log = []
 
         # 基础系统提示词
-        if config.polishing_prompt_selection["last_selected_id"]  == PromptBuilderEnum.POLISH_COMMON:
+        selected_id = config.polishing_prompt_selection.get("last_selected_id")
+        if selected_id in PromptBuilderPolishing.BUILTIN_COMMON_PROMPT_IDS:
             system = PromptBuilderPolishing.build_system(config)
         else:
             system = config.polishing_prompt_selection["prompt_content"]  # 自定义提示词
@@ -276,14 +292,14 @@ class PromptBuilderPolishing(Base):
 
         # 构建待翻译文本
 
-        if config.polishing_mode_selection == "source_text_polish":
+        if config.polishing_mode_selection == POLISH_SOURCE_TEXT:
 
             source_text = PromptBuilder.build_source_text(config,source_text_dict)
             pre_prompt = PromptBuilderPolishing.build_source_prefix(config) # 用户提问前置文本
 
             source_text_str = f"{previous}\n{pre_prompt}<textarea>\n{source_text}\n</textarea>"
 
-        elif config.polishing_mode_selection == "translated_text_polish":
+        elif config.polishing_mode_selection == POLISH_TRANSLATED_TEXT:
             source_text = PromptBuilder.build_source_text(config,source_text_dict)
             translation_text = PromptBuilder.build_source_text(config,translation_text_dict)
             pre_prompt_A,pre_prompt_B = PromptBuilderPolishing.build_translated_prefix(config) # 用户提问前置文本

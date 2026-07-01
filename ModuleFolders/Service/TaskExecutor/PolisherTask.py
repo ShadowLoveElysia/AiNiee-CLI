@@ -12,6 +12,10 @@ from ModuleFolders.Base.Base import Base
 from ModuleFolders.Base.PluginManager import PluginManager
 from ModuleFolders.Infrastructure.Cache.CacheItem import CacheItem, TranslationStatus
 from ModuleFolders.Infrastructure.TaskConfig.TaskConfig import TaskConfig
+from ModuleFolders.Infrastructure.TaskConfig.PolishingMode import (
+    POLISH_SOURCE_TEXT,
+    POLISH_TRANSLATED_TEXT,
+)
 from ModuleFolders.Infrastructure.LLMRequester.LLMRequester import LLMRequester
 from ModuleFolders.Domain.PromptBuilder.PromptBuilderPolishing import PromptBuilderPolishing
 from ModuleFolders.Domain.ResponseExtractor.ResponseExtractor import ResponseExtractor
@@ -47,6 +51,21 @@ class PolisherTask(Base):
     def set_previous_items(self, previous_items: list[CacheItem]) -> None:
         self.previous_items = previous_items
 
+    def build_polishing_preview(self) -> str:
+        mode = getattr(self.config, "polishing_mode_selection", POLISH_TRANSLATED_TEXT)
+        if mode == POLISH_TRANSLATED_TEXT:
+            preview_source = [str(getattr(item, "translated_text", "") or "") for item in self.items]
+        else:
+            preview_source = [str(getattr(item, "source_text", "") or "") for item in self.items]
+
+        preview_source = [text for text in preview_source if text]
+        if not preview_source:
+            return ""
+        preview_text = preview_source[0][:50] + "..." if len(preview_source[0]) > 50 else preview_source[0]
+        if len(preview_source) > 1:
+            preview_text += f" (+{len(preview_source)-1} lines)"
+        return preview_text
+
     # 消息构建预处理
     def prepare(self) -> None:
 
@@ -58,7 +77,7 @@ class PolisherTask(Base):
 
         # 如果开启了翻译文本润色模式
         self.translation_text_dict = {}
-        if self.config.polishing_mode_selection == "translated_text_polish":
+        if self.config.polishing_mode_selection == POLISH_TRANSLATED_TEXT:
             self.translation_text_dict = {str(i): v.translated_text for i, v in enumerate(self.items)}
 
         # 生成文本行数信息
@@ -69,7 +88,7 @@ class PolisherTask(Base):
             self.config,
             self.source_text_dict
             )
-        if self.config.polishing_mode_selection == "translated_text_polish":
+        if self.config.polishing_mode_selection == POLISH_TRANSLATED_TEXT:
             self.translation_text_dict = self.text_processor.replace_all(
                 self.config,
                 self.translation_text_dict
@@ -118,11 +137,8 @@ class PolisherTask(Base):
 
         # Log source text for UI feedback (Moved to after rate limit)
         if Base.work_status != Base.STATUS.STOPING and Base.is_task_session_active(session_id):
-            source_preview = list(self.source_text_dict.values())
-            if source_preview:
-                preview_text = source_preview[0][:50] + "..." if len(source_preview[0]) > 50 else source_preview[0]
-                if len(source_preview) > 1:
-                    preview_text += f" (+{len(source_preview)-1} lines)"
+            preview_text = self.build_polishing_preview()
+            if preview_text:
                 self.print(f"[dim][{self.task_id}] Polishing: {preview_text}[/dim]")
                 self.print(f"[STATUS] [{self.task_id}] Polishing: {preview_text}")
 
@@ -296,10 +312,10 @@ class PolisherTask(Base):
             return {}
 
         # 根据润色模式调整文本对象
-        if self.config.polishing_mode_selection == "source_text_polish":
+        if self.config.polishing_mode_selection == POLISH_SOURCE_TEXT:
             # 如果是源文本润色模式，则直接使用源文本字典
             text_dict = self.source_text_dict
-        elif self.config.polishing_mode_selection == "translated_text_polish":
+        elif self.config.polishing_mode_selection == POLISH_TRANSLATED_TEXT:
             # 如果是译文润色模式，则使用译文文本字典
             text_dict = self.translation_text_dict
 

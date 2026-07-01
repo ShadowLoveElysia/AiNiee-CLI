@@ -15,6 +15,10 @@ from ModuleFolders.Infrastructure.TaskConfig.TaskType import TaskType
 from ModuleFolders.Service.TaskExecutor.TranslatorTask import TranslatorTask
 from ModuleFolders.Service.TaskExecutor.PolisherTask import PolisherTask
 from ModuleFolders.Infrastructure.TaskConfig.TaskConfig import TaskConfig
+from ModuleFolders.Infrastructure.TaskConfig.PolishingMode import (
+    POLISH_SOURCE_TEXT,
+    POLISH_TRANSLATED_TEXT,
+)
 from ModuleFolders.Domain.PromptBuilder.PromptBuilder import PromptBuilder
 from ModuleFolders.Domain.PromptBuilder.PromptBuilderPolishing import PromptBuilderPolishing
 from ModuleFolders.Domain.PromptBuilder.PromptBuilderEnum import PromptBuilderEnum
@@ -1191,7 +1195,7 @@ class TaskExecutor(Base):
             # ----------------------------------------------------------------
 
             # 更新初始进度
-            if self.config.polishing_mode_selection == "source_text_polish":
+            if self.config.polishing_mode_selection == POLISH_SOURCE_TEXT:
                 self.project_status_data.line = self.cache_manager.get_item_count_by_status(TranslationStatus.UNTRANSLATED)
             else:
                 self.project_status_data.line = self.cache_manager.get_item_count_by_status(TranslationStatus.POLISHED)
@@ -1205,7 +1209,7 @@ class TaskExecutor(Base):
             self.plugin_manager.broadcast_event("text_filter", self.config, self.cache_manager.project)
 
             self.project_status_data.total_line = self._get_non_excluded_item_count()
-            if self.config.polishing_mode_selection == "source_text_polish":
+            if self.config.polishing_mode_selection == POLISH_SOURCE_TEXT:
                 self.project_status_data.line = self.cache_manager.get_item_count_by_status(TranslationStatus.UNTRANSLATED)
             else:
                 self.project_status_data.line = self.cache_manager.get_item_count_by_status(TranslationStatus.POLISHED)
@@ -1222,9 +1226,9 @@ class TaskExecutor(Base):
                     return None
 
                 # 根据润色模式，获取可润色的条目数量
-                if self.config.polishing_mode_selection == "source_text_polish":
+                if self.config.polishing_mode_selection == POLISH_SOURCE_TEXT:
                     item_count_status_unpolishd = self.cache_manager.get_item_count_by_status(TranslationStatus.UNTRANSLATED)
-                elif self.config.polishing_mode_selection == "translated_text_polish":
+                elif self.config.polishing_mode_selection == POLISH_TRANSLATED_TEXT:
                     item_count_status_unpolishd = self.cache_manager.get_item_count_by_status(TranslationStatus.TRANSLATED)
 
                 # 判断是否需要继续润色
@@ -1267,7 +1271,7 @@ class TaskExecutor(Base):
                         )
 
                 # 生成缓存数据条目片段的合集列表
-                if self.config.polishing_mode_selection == "source_text_polish":
+                if self.config.polishing_mode_selection == POLISH_SOURCE_TEXT:
                     chunks, previous_chunks, file_paths, source_context_chunks = self.cache_manager.generate_item_chunks(
                         "line" if self.config.tokens_limit_switch == False else "token",
                         self.config.lines_limit if self.config.tokens_limit_switch == False else self.config.tokens_limit,
@@ -1278,7 +1282,7 @@ class TaskExecutor(Base):
                         getattr(self.config, 'chunk_soft_limit_extra_lines', 0),
                         getattr(self.config, 'line_split_optimization_mode', 'off')
                     )
-                elif self.config.polishing_mode_selection == "translated_text_polish":
+                elif self.config.polishing_mode_selection == POLISH_TRANSLATED_TEXT:
                     chunks, previous_chunks, file_paths, source_context_chunks = self.cache_manager.generate_item_chunks(
                         "line" if self.config.tokens_limit_switch == False else "token",
                         self.config.lines_limit if self.config.tokens_limit_switch == False else self.config.tokens_limit,

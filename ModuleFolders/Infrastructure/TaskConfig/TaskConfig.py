@@ -9,6 +9,10 @@ import rapidjson as json
 from ModuleFolders.Base.Base import Base
 from ModuleFolders.Infrastructure.LLMRequester.SdkRequestMode import sync_sdk_request_mode_config
 from ModuleFolders.Infrastructure.TaskConfig.TaskType import TaskType
+from ModuleFolders.Infrastructure.TaskConfig.PolishingMode import (
+    POLISH_TRANSLATED_TEXT,
+    normalize_polishing_mode,
+)
 from .default_config import DEFAULT_CONFIG
 
 RULE_CHILD_SWITCH_KEYS = (
@@ -148,7 +152,7 @@ class TaskConfig(Base):
         self.enable_bilingual_output = False # NEW: 是否启用双语输出
         self.bilingual_text_order = "translation_first" # NEW: 双语文本顺序
         self.epub_language_update_mode = "auto"
-        self.polishing_mode_selection = "translated_text_polish" # NEW: 润色模式选择
+        self.polishing_mode_selection = POLISH_TRANSLATED_TEXT # NEW: 润色模式选择
         self.polishing_pre_line_counts = 2 # NEW: 润色时获取上文的行数
         self.cache_backup_limit = 10
         self.cache_save_interval = 8
@@ -254,6 +258,9 @@ class TaskConfig(Base):
         self.sdk_request_mode = synced["sdk_request_mode"]
         self.use_openai_sdk = synced["use_openai_sdk"]
         self._normalize_runtime_limits()
+        self.polishing_mode_selection = normalize_polishing_mode(
+            getattr(self, "polishing_mode_selection", POLISH_TRANSLATED_TEXT)
+        )
 
     def _normalize_runtime_limits(self) -> None:
         try:

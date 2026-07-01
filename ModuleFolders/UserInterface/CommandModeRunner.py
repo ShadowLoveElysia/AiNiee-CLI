@@ -11,6 +11,7 @@ from rich.panel import Panel
 
 from ModuleFolders.Base.Base import Base
 from ModuleFolders.Infrastructure.MangaFeatureGuard import get_manga_feature_status
+from ModuleFolders.Infrastructure.TaskConfig.PolishingMode import normalize_polishing_mode
 from ModuleFolders.Infrastructure.TaskConfig.TaskType import TaskType
 
 
@@ -251,6 +252,12 @@ class CommandModeRunner:
             self.host.config["round_limit"] = args.rounds
         if args.pre_lines is not None:
             self.host.config["pre_line_counts"] = args.pre_lines
+        if getattr(args, "polish_mode", None):
+            runtime_overrides = getattr(self.host, "runtime_config_overrides", {})
+            if not isinstance(runtime_overrides, dict):
+                runtime_overrides = {}
+            runtime_overrides["polishing_mode_selection"] = normalize_polishing_mode(args.polish_mode)
+            self.host.runtime_config_overrides = runtime_overrides
 
         if args.lines is not None:
             self.host.config["tokens_limit_switch"] = False

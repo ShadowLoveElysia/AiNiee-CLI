@@ -936,6 +936,19 @@ export const Settings: React.FC = () => {
                </select>
             </div>
 
+            <div className="space-y-2">
+               <label className="text-xs font-semibold text-slate-400 uppercase">{t('setting_polishing_mode_selection')}</label>
+               <p className="text-[10px] text-slate-500">{t('setting_polishing_mode_selection_desc')}</p>
+               <select
+                  value={config.polishing_mode_selection ?? 'translated_text_polish'}
+                  onChange={(e) => handleChange('polishing_mode_selection', e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:border-primary text-sm"
+               >
+                  <option value="translated_text_polish">{t('choice_translated_text_polish')}</option>
+                  <option value="source_text_polish">{t('choice_source_text_polish')}</option>
+               </select>
+            </div>
+
             <div className="p-4 border border-slate-700 rounded-lg bg-slate-900/30">
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
