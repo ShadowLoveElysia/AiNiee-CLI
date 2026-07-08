@@ -11,6 +11,7 @@ import rapidjson as json
 
 from rich.console import Console
 
+from ModuleFolders.Domain.PromptBuilder.PromptBuilder import PromptBuilder
 from ModuleFolders.Infrastructure.TaskConfig.ConfigProfileService import (
     atomic_write_json,
     normalize_rules_payload,
@@ -365,21 +366,31 @@ class GlossaryAnalyzer:
             )
 
         if incremental_options.get("enabled"):
-            existing_context = existing_rules_context or self._build_incremental_existing_rules_context()
-            system_prompt = self._append_incremental_analysis_instruction(
-                system_prompt,
-                existing_context,
-                incremental_options,
+            existing_context = (
+                existing_rules_context
+                if existing_rules_context is not None
+                else self._build_incremental_existing_rules_context(selected_text)
             )
             mode_bits = []
             if incremental_options.get("new"):
                 mode_bits.append("new")
             if incremental_options.get("replace"):
                 mode_bits.append("replace")
-            console.print(
-                f"[cyan]{self._tr('msg_glossary_incremental_enabled', '已启用增量术语提取')}: "
-                f"{'/'.join(mode_bits) or 'metadata'} | {incremental_options.get('source_label') or '-'}[/cyan]"
-            )
+            if self._has_any_incremental_reference_content(existing_context):
+                system_prompt = self._append_incremental_analysis_instruction(
+                    system_prompt,
+                    existing_context,
+                    incremental_options,
+                )
+                console.print(
+                    f"[cyan]{self._tr('msg_glossary_incremental_enabled', '已启用增量术语提取')}: "
+                    f"{'/'.join(mode_bits) or 'metadata'} | {incremental_options.get('source_label') or '-'}[/cyan]"
+                )
+            else:
+                console.print(
+                    f"[cyan]{self._tr('msg_glossary_incremental_context_empty_fallback', '增量参考完全为空：未匹配到旧术语、角色、禁翻或示例，且没有世界观参考；按普通提取提示词分析本次原文，保存时仍会保留来源元数据。')}: "
+                    f"{'/'.join(mode_bits) or 'metadata'} | {incremental_options.get('source_label') or '-'}[/cyan]"
+                )
 
         if legacy_mode == "legacy_translation_extract":
             system_prompt = self._append_legacy_translation_extract_instruction(system_prompt, target_language)
@@ -1051,14 +1062,112 @@ class GlossaryAnalyzer:
                     existing[key] = value
         return result
 
-    def _build_incremental_existing_rules_context(self):
-        context = {}
-        for key in STRUCTURED_RULE_KEYS:
-            if key.endswith("_history"):
+    def _build_incremental_existing_rules_context(self, source_text=""):
+        source_text = self._normalize_glossary_text(source_text)
+        matched_terms = PromptBuilder.find_glossary_matches(
+            self.config.get("prompt_dictionary_data", []),
+            source_text,
+        )
+        matched_exclusions = self._filter_rule_items_by_source_text(
+            self.config.get("exclusion_list_data", []),
+            source_text,
+            self._exclusion_item_match_keys,
+        )
+        matched_characters = self._filter_rule_items_by_source_text(
+            self.config.get("characterization_data", []),
+            source_text,
+            self._character_item_match_keys,
+        )
+        matched_keys = self._collect_incremental_context_match_keys(
+            matched_terms,
+            matched_exclusions,
+            matched_characters,
+        )
+        matched_examples = self._filter_translation_examples_for_incremental_context(
+            self.config.get("translation_example_data", []),
+            source_text,
+            matched_keys,
+        )
+
+        return {
+            "prompt_dictionary_data": self._trim_existing_rule_value(matched_terms),
+            "exclusion_list_data": self._trim_existing_rule_value(matched_exclusions),
+            "characterization_data": self._trim_existing_rule_value(matched_characters),
+            "world_building_content": self._trim_existing_rule_value(
+                self.config.get("world_building_content", "")
+            ),
+            "writing_style_content": "",
+            "translation_example_data": self._trim_existing_rule_value(matched_examples),
+        }
+
+    def _has_any_incremental_reference_content(self, context):
+        if not isinstance(context, dict):
+            return False
+        return any([
+            bool(context.get("prompt_dictionary_data")),
+            bool(context.get("exclusion_list_data")),
+            bool(context.get("characterization_data")),
+            bool(self._normalize_glossary_text(context.get("world_building_content"))),
+            bool(self._normalize_glossary_text(context.get("writing_style_content"))),
+            bool(context.get("translation_example_data")),
+        ])
+
+    def _filter_rule_items_by_source_text(self, items, source_text, key_builder):
+        if not source_text:
+            return []
+        matched = []
+        for item in items or []:
+            if not isinstance(item, dict):
                 continue
-            value = self.config.get(key, [] if key.endswith("_data") else "")
-            context[key] = self._trim_existing_rule_value(value)
-        return context
+            keys = key_builder(item)
+            if self._any_incremental_context_key_matches(source_text, keys):
+                matched.append(item)
+        return matched
+
+    def _any_incremental_context_key_matches(self, source_text, keys):
+        for key in keys or []:
+            key = self._normalize_glossary_text(key)
+            if key and key in source_text:
+                return True
+        return False
+
+    def _glossary_item_match_keys(self, item):
+        return [item.get("src")]
+
+    def _exclusion_item_match_keys(self, item):
+        return [item.get("markers")]
+
+    def _character_item_match_keys(self, item):
+        aliases, _ = self._normalize_aliases_with_notes(item.get("aliases"))
+        return [item.get("original_name"), *aliases]
+
+    def _collect_incremental_context_match_keys(self, terms, exclusions, characters):
+        keys = []
+        for item in terms or []:
+            keys.extend(self._glossary_item_match_keys(item))
+        for item in exclusions or []:
+            keys.extend(self._exclusion_item_match_keys(item))
+        for item in characters or []:
+            keys.extend(self._character_item_match_keys(item))
+        return [
+            key
+            for key in (self._normalize_glossary_text(value) for value in keys)
+            if key
+        ]
+
+    def _filter_translation_examples_for_incremental_context(self, examples, source_text, matched_keys):
+        if not source_text:
+            return []
+        matched = []
+        for item in examples or []:
+            if not isinstance(item, dict):
+                continue
+            example_src = self._normalize_glossary_text(item.get("src"))
+            if not example_src:
+                continue
+            if example_src in source_text or self._any_incremental_context_key_matches(example_src, matched_keys):
+                matched.append(item)
+        return matched
 
     def _trim_existing_rule_value(self, value, max_items=300, max_chars=12000):
         if isinstance(value, dict):
