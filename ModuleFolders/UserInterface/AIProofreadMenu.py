@@ -42,6 +42,12 @@ class AIProofreadMenu:
     def i18n(self):
         return self.host.i18n
 
+    def _tr(self, key: str) -> str:
+        return self.i18n.get(key) if self.i18n else key
+
+    def _press_enter(self) -> None:
+        input(f"\n{self._tr('msg_press_enter_to_continue')}")
+
     @staticmethod
     def _resolve_correction_target_field(report_item, cache_item) -> str:
         """确定AI校对修正应写回的缓存字段。"""
@@ -85,18 +91,20 @@ class AIProofreadMenu:
 
         while True:
             self.host.display_banner()
-            console.print(Panel(f"[bold]{self.i18n.get('menu_ai_proofread') or 'AI自主校对'}[/bold]"))
+            console.print(Panel(f"[bold]{self._tr('menu_ai_proofread')}[/bold]"))
 
             table = Table(show_header=False, box=None)
-            table.add_row("[cyan]1.[/]", self.i18n.get("proofread_start_current") or "开始校对（当前项目）")
-            table.add_row("[cyan]2.[/]", self.i18n.get("proofread_select_project") or "选择项目校对")
-            table.add_row("[cyan]3.[/]", self.i18n.get("proofread_settings") or "校对设置")
+            table.add_row("[cyan]1.[/]", self._tr("proofread_start_current"))
+            table.add_row("[cyan]2.[/]", self._tr("proofread_select_project"))
+            table.add_row("[cyan]3.[/]", self._tr("proofread_settings"))
+            table.add_row("[cyan]4.[/]", self._tr("proofread_suggestion_review"))
+            table.add_row("[cyan]5.[/]", self._tr("proofread_suggestion_review_saved"))
             console.print(table)
-            console.print(f"\n[dim]0. {self.i18n.get('menu_back') or 'Back'}[/dim]")
+            console.print(f"\n[dim]0. {self._tr('menu_back')}[/dim]")
 
             choice = IntPrompt.ask(
-                f"\n{self.i18n.get('prompt_select') or 'Select'}",
-                choices=["0", "1", "2", "3"],
+                f"\n{self._tr('prompt_select')}",
+                choices=["0", "1", "2", "3", "4", "5"],
                 show_choices=False
             )
 
@@ -110,6 +118,10 @@ class AIProofreadMenu:
                     self._select_project_for_proofread()
             elif choice == 3:
                 self._proofread_settings_menu()
+            elif choice == 4:
+                self._start_proofread_suggestion_review()
+            elif choice == 5:
+                self._review_saved_proofread_suggestions()
 
     def _start_ai_proofread(self):
         """开始AI校对当前项目"""
@@ -118,15 +130,249 @@ class AIProofreadMenu:
             cache_file = os.path.join(output_path, "cache", "AinieeCacheData.json")
 
             if not os.path.exists(cache_file):
-                console.print(f"[red]{self.i18n.get('proofread_no_cache') or '未找到缓存文件'}[/red]")
-                input("\nPress Enter to continue...")
+                console.print(f"[red]{self._tr('proofread_no_cache')}[/red]")
+                self._press_enter()
                 return
 
             self._execute_proofread(output_path)
 
         except Exception as e:
-            console.print(f"[red]{self.i18n.get('proofread_error') or '校对出错'}: {e}[/red]")
-            input("\nPress Enter to continue...")
+            console.print(f"[red]{self._tr('proofread_error')}: {e}[/red]")
+            self._press_enter()
+
+    def _start_proofread_suggestion_review(self):
+        """生成AI校对建议并打开独立采纳界面。"""
+        try:
+            output_path = self.config.get("label_output_path", "./output")
+            cache_file = os.path.join(output_path, "cache", "AinieeCacheData.json")
+            if not os.path.exists(cache_file):
+                console.print(f"[red]{self._tr('proofread_no_cache')}[/red]")
+                self._press_enter()
+                return
+
+            if not Confirm.ask(self._tr("proofread_suggestion_confirm_generate"), default=False):
+                return
+
+            self._execute_proofread_suggestion_review(output_path)
+        except Exception as e:
+            console.print(f"[red]{self._tr('proofread_error')}: {e}[/red]")
+            self._press_enter()
+
+    def _execute_proofread_suggestion_review(self, project_path: str):
+        """执行建议式AI校对，并进入独立采纳系统。"""
+        import concurrent.futures
+
+        from ModuleFolders.Infrastructure.RequestLimiter.RequestLimiter import RequestLimiter
+        from ModuleFolders.Service.Proofreader import (
+            ProofreadSuggestionStore,
+            build_proofread_batch,
+            collect_suggestion_items,
+        )
+        from ModuleFolders.Service.Proofreader.ProofreadSuggestionTask import ProofreadSuggestionTask
+        from ModuleFolders.UserInterface.Proofreader import ProofreadSuggestionTUI
+
+        cache_path = os.path.join(project_path, "cache", "AinieeCacheData.json")
+        project = CacheManager.read_from_file(cache_path)
+        items = collect_suggestion_items(project)
+        if not items:
+            console.print(f"[yellow]{self._tr('proofread_suggestion_no_translated_items')}[/yellow]")
+            self._press_enter()
+            return
+
+        task_config = TaskConfig()
+        task_config.load_config_from_dict(self.config)
+        task_config.prepare_for_translation(TaskType.TRANSLATION)
+
+        request_limiter = RequestLimiter()
+        request_limiter.set_limit(
+            self.config.get("tpm_limit", 100000),
+            self.config.get("rpm_limit", 60),
+        )
+
+        try:
+            batch_size = max(1, int(self.config.get("proofread_batch_size", self.config.get("lines_limit", 30))))
+        except (TypeError, ValueError):
+            batch_size = 30
+        try:
+            context_count = max(0, int(self.config.get("proofread_context_lines", self.config.get("pre_line_counts", 3))))
+        except (TypeError, ValueError):
+            context_count = 3
+
+        batches = [
+            build_proofread_batch(items, batch_index, batch_size)
+            for batch_index in range((len(items) + batch_size - 1) // batch_size)
+        ]
+        glossary = self.config.get("prompt_dictionary_data", []) or []
+        store = ProofreadSuggestionStore(project_path)
+        store.load()
+
+        total_tokens = 0
+        suggestions_found = 0
+        closed_batches = 0
+        completed_tasks = 0
+        lock = threading.Lock()
+
+        def build_context_for_batch(batch_index: int) -> list[dict]:
+            if context_count <= 0:
+                return []
+            start = max(0, batch_index * batch_size - context_count)
+            end = batch_index * batch_size
+            return [
+                {
+                    "source": item.get("source_text", ""),
+                    "translation": item.get("translation", ""),
+                }
+                for item in items[start:end]
+            ]
+
+        def task_done_callback(future):
+            nonlocal total_tokens, suggestions_found, closed_batches, completed_tasks
+            try:
+                task_result = future.result()
+                with lock:
+                    completed_tasks += 1
+                    if task_result.get("skip", True):
+                        closed_batches += 1
+                        return
+                    total_tokens += task_result.get("prompt_tokens", 0) + task_result.get("completion_tokens", 0)
+                    parsed = task_result.get("result")
+                    if parsed is None:
+                        closed_batches += 1
+                        return
+                    store.add_batch_result(parsed)
+                    if parsed.closed_without_suggestions and not parsed.suggestions:
+                        closed_batches += 1
+                    suggestions_found += len(parsed.suggestions)
+            except Exception:
+                with lock:
+                    completed_tasks += 1
+
+        tasks_list = []
+        for index, batch in enumerate(batches):
+            task = ProofreadSuggestionTask(
+                task_config,
+                request_limiter,
+                batch,
+                glossary=glossary,
+                context_lines=build_context_for_batch(index),
+            )
+            task.prepare()
+            tasks_list.append(task)
+
+        console.print(f"[blue]{self._tr('proofread_suggestion_generating_batches').format(len(batches))}[/blue]")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn(f"[bold blue]{self._tr('proofread_suggestion_progress_title')}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("•"),
+            TextColumn("{task.completed}/{task.total}"),
+            TextColumn("•"),
+            TextColumn(f"[cyan]{self._tr('proofread_suggestion_progress_tokens')}: {{task.fields[tokens]}}"),
+            TextColumn("•"),
+            TextColumn(f"[yellow]{self._tr('proofread_suggestion_progress_suggestions')}: {{task.fields[suggestions]}}"),
+            TimeElapsedColumn(),
+            console=console,
+            refresh_per_second=10,
+        ) as progress:
+            progress_task = progress.add_task(
+                self._tr("proofread_suggestion_progress_title"),
+                total=len(tasks_list),
+                tokens=0,
+                suggestions=0,
+            )
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=task_config.actual_thread_counts,
+                thread_name_prefix="proofread-suggestion",
+            ) as executor:
+                futures = []
+                for task in tasks_list:
+                    if Base.work_status == Base.STATUS.STOPING:
+                        break
+                    future = executor.submit(task.run)
+                    future.add_done_callback(task_done_callback)
+                    futures.append(future)
+
+                while not all(f.done() for f in futures):
+                    with lock:
+                        progress.update(
+                            progress_task,
+                            completed=completed_tasks,
+                            tokens=total_tokens,
+                            suggestions=suggestions_found,
+                        )
+                    time.sleep(0.1)
+
+                with lock:
+                    progress.update(
+                        progress_task,
+                        completed=len(tasks_list),
+                        tokens=total_tokens,
+                        suggestions=suggestions_found,
+                    )
+
+        console.print(
+            f"[green]{self._tr('proofread_suggestion_generation_done').format(total_tokens, suggestions_found, closed_batches)}[/green]"
+        )
+        if store.report_path.exists():
+            console.print(f"[green]{self._tr('proofread_suggestion_report_saved').format(store.report_path)}[/green]")
+
+        if suggestions_found == 0:
+            console.print(f"[yellow]{self._tr('proofread_suggestion_none_to_review')}[/yellow]")
+            self._press_enter()
+            return
+
+        tui = ProofreadSuggestionTUI(console, self.i18n)
+        review_result = tui.run(store, project)
+        if review_result.accepted > 0:
+            manager = CacheManager()
+            manager.project = project
+            manager.save_to_file_require_path = project_path
+            manager.save_to_file()
+            console.print(f"[green]{self._tr('proofread_suggestion_saved_cache').format(review_result.accepted)}[/green]")
+        console.print(
+            f"[cyan]{self._tr('proofread_suggestion_review_summary').format(review_result.accepted, review_result.rejected, review_result.ignored, review_result.conflicts)}[/cyan]"
+        )
+        self._press_enter()
+
+    def _review_saved_proofread_suggestions(self):
+        """读取已保存的建议报告，并进入独立采纳系统。"""
+        try:
+            output_path = self.config.get("label_output_path", "./output")
+            self._execute_saved_proofread_suggestion_review(output_path)
+        except Exception as e:
+            console.print(f"[red]{self._tr('proofread_error')}: {e}[/red]")
+            self._press_enter()
+
+    def _execute_saved_proofread_suggestion_review(self, project_path: str):
+        from ModuleFolders.Service.Proofreader import ProofreadSuggestionStore
+        from ModuleFolders.UserInterface.Proofreader import ProofreadSuggestionTUI
+
+        cache_file = os.path.join(project_path, "cache", "AinieeCacheData.json")
+        if not os.path.exists(cache_file):
+            console.print(f"[red]{self._tr('proofread_no_cache')}[/red]")
+            self._press_enter()
+            return
+
+        store = ProofreadSuggestionStore(project_path)
+        if not store.load_report():
+            console.print(f"[yellow]{self._tr('proofread_suggestion_no_saved_report')}[/yellow]")
+            self._press_enter()
+            return
+
+        project = CacheManager.read_from_file(cache_file)
+        tui = ProofreadSuggestionTUI(console, self.i18n)
+        review_result = tui.run(store, project, reload_store=False)
+        if review_result.accepted > 0:
+            manager = CacheManager()
+            manager.project = project
+            manager.save_to_file_require_path = project_path
+            manager.save_to_file()
+            console.print(f"[green]{self._tr('proofread_suggestion_saved_cache').format(review_result.accepted)}[/green]")
+        console.print(
+            f"[cyan]{self._tr('proofread_suggestion_review_summary').format(review_result.accepted, review_result.rejected, review_result.ignored, review_result.conflicts)}[/cyan]"
+        )
+        self._press_enter()
 
     def _execute_proofread(self, project_path: str):
         """执行校对"""
