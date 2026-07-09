@@ -171,7 +171,7 @@ class TaskConfig(Base):
         self.thinking_budget = -1
         self.structured_output_mode = 0
         self.enable_stream_api = True  # 流式API开关，默认启用
-        self.sdk_request_mode = "httpx" # 请求模式：httpx/openai/anthropic
+        self.sdk_request_mode = "httpx" # 请求模式：httpx/openai/anthropic/google
         self.use_openai_sdk = False     # 兼容旧配置：True 视为 OpenAI SDK
         self.manga_detect_engine = "comic-text-bubble-detector"
         self.manga_segment_engine = "comic-text-detector"

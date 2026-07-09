@@ -120,7 +120,7 @@ API Key 建议尽量使用 `Ctrl+V` 粘贴。由于程序有脱敏保护，粘�
   <sub>图 8：主菜单中选择 7，进入 API 配置。</sub>
 </p>
 
-在 API 配置菜单中选择 `5. SDK 请求模式`。该项会按 `HTTPX -> OpenAI SDK -> Anthropic SDK -> HTTPX` 循环切换；DeepSeek 这里切到 `OpenAI SDK` 即可。`Anthropic SDK` 表示使用 Anthropic 协议，不限定 Claude 模型。
+在 API 配置菜单中选择 `5. SDK 请求模式`。该项会按 `HTTPX -> OpenAI SDK -> Anthropic SDK -> Google SDK -> HTTPX` 循环切换；DeepSeek 这里切到 `OpenAI SDK` 即可。`Anthropic SDK` 表示使用 Anthropic 协议，不限定 Claude 模型；`Google SDK` 表示使用 Google 官方 GenAI SDK。
 
 <p align="center">
   <img src="../README_IMG/9.png" alt="图 9：切换 SDK 请求模式" width="70%">

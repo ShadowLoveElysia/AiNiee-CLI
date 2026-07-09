@@ -133,7 +133,7 @@ For DeepSeek, if the default HTTPX request mode fails with a 404-like error, go 
 SDK Request Mode
 ```
 
-This option cycles `HTTPX -> OpenAI SDK -> Anthropic SDK -> HTTPX`. For DeepSeek, switch it to `OpenAI SDK`, then verify the API again. `Anthropic SDK` means the Anthropic protocol; it is not limited to Claude models.
+This option cycles `HTTPX -> OpenAI SDK -> Anthropic SDK -> Google SDK -> HTTPX`. For DeepSeek, switch it to `OpenAI SDK`, then verify the API again. `Anthropic SDK` means the Anthropic protocol; it is not limited to Claude models. `Google SDK` means the official Google GenAI SDK.
 
 ## 7. Configure Project Settings
 

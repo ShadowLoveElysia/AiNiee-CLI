@@ -3,6 +3,7 @@ import threading
 from typing import Dict, Any
 import httpx
 import json
+from urllib.parse import urlparse, urlunparse
 
 
 def create_httpx_client(
@@ -128,7 +129,7 @@ class LLMClientFactory:
     def get_google_client(self, config: Dict[str, Any]) -> Any:
         """获取Google AI客户端"""
         api_key = config.get("api_key")
-        api_url = config.get("api_url")
+        api_url = self._normalize_google_api_url(config.get("api_url"))
         extra_body = config.get("extra_body")
         extra_body_serialized = json.dumps(extra_body, sort_keys=True) if extra_body else None
         key = ("google", api_key, api_url, extra_body_serialized)
@@ -197,7 +198,7 @@ class LLMClientFactory:
         from google import genai
 
         api_key = config.get("api_key")
-        api_url = config.get("api_url")
+        api_url = self._normalize_google_api_url(config.get("api_url"))
         extra_body = config.get("extra_body")
 
         http_options = {}
@@ -210,3 +211,17 @@ class LLMClientFactory:
             return genai.Client(api_key=api_key, http_options=http_options)
         else:
             return genai.Client(api_key=api_key)
+
+    def _normalize_google_api_url(self, api_url):
+        api_url = str(api_url or "").strip()
+        if not api_url:
+            return api_url
+
+        parsed = urlparse(api_url)
+        path_parts = [part for part in parsed.path.split("/") if part]
+        if path_parts and path_parts[-1].lower() == "openai":
+            path_parts = path_parts[:-1]
+            normalized_path = "/" + "/".join(path_parts) if path_parts else ""
+            return urlunparse(parsed._replace(path=normalized_path, params="", query="", fragment="")).rstrip("/")
+
+        return api_url.rstrip("/")

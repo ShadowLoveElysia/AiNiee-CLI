@@ -834,7 +834,7 @@ register_config(ConfigItem(
     config_type=ConfigType.CHOICE,
     i18n_key="setting_sdk_request_mode",
     i18n_desc_key="setting_sdk_request_mode_desc",
-    choices=["httpx", "openai", "anthropic"],
+    choices=["httpx", "openai", "anthropic", "google"],
     category="api"
 ))
 

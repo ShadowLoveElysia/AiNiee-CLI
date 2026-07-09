@@ -21,7 +21,7 @@ from ModuleFolders.Base.Base import Base
 from ModuleFolders.Infrastructure.LLMRequester.AsyncOpenaiRequester import AsyncOpenaiRequester
 from ModuleFolders.Infrastructure.LLMRequester.ErrorClassifier import ErrorClassifier, ErrorType
 from ModuleFolders.Infrastructure.LLMRequester.AsyncSignalHub import get_signal_hub
-from ModuleFolders.Infrastructure.LLMRequester.SdkRequestMode import is_anthropic_sdk_mode
+from ModuleFolders.Infrastructure.LLMRequester.SdkRequestMode import is_anthropic_sdk_mode, is_openai_sdk_mode
 
 
 class AsyncLLMRequester(Base):
@@ -125,7 +125,7 @@ class AsyncLLMRequester(Base):
                     result = await self._request_sakura_async(messages, system_prompt, platform_config)
                 elif target_platform == "LocalLLM":
                     result = await self._request_local_async(messages, system_prompt, platform_config)
-                elif target_platform == "google" or (target_platform.startswith("custom_platform_") and api_format == "Google"):
+                elif (target_platform == "google" or (target_platform.startswith("custom_platform_") and api_format == "Google")) and not is_openai_sdk_mode(platform_config):
                     result = await self._request_google_async(messages, system_prompt, platform_config)
                 elif target_platform == "anthropic" or (target_platform.startswith("custom_platform_") and api_format == "Anthropic"):
                     result = await self._request_anthropic_async(messages, system_prompt, platform_config)

@@ -340,6 +340,18 @@ class APIManager:
                         if skip:
                             raise Exception(response_content)
                         content = response_content
+                    elif plat_conf.get("api_format") == "Google" and not is_openai_sdk_mode(self.config):
+                        # ===== Google SDK 验证模式 =====
+                        from ModuleFolders.Infrastructure.LLMRequester.GoogleRequester import GoogleRequester
+
+                        skip, response_think, response_content, prompt_tokens, completion_tokens = GoogleRequester().request_google(
+                            [{"role": "user", "content": self.i18n.get("msg_test_msg")}],
+                            "",
+                            plat_conf,
+                        )
+                        if skip:
+                            raise Exception(response_content)
+                        content = response_content
                     elif is_openai_sdk_mode(self.config):
                         # ===== OpenAI SDK 验证模式 =====
                         from ModuleFolders.Infrastructure.LLMRequester.LLMClientFactory import LLMClientFactory

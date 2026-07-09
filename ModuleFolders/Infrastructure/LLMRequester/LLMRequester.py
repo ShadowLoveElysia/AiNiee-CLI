@@ -53,6 +53,7 @@ class LLMRequester:
     # Dispatch request
     def sent_request(self, messages: list[dict], system_prompt: str, platform_config: dict) -> tuple[bool, str, str, int, int]:
         from ModuleFolders.Base.Base import Base
+        from ModuleFolders.Infrastructure.LLMRequester.SdkRequestMode import is_openai_sdk_mode
 
         config = Base().load_config()
 
@@ -112,7 +113,7 @@ class LLMRequester:
                     system_prompt,
                     platform_config,
                 )
-            elif target_platform == "google" or (target_platform.startswith("custom_platform_") and api_format == "Google"):
+            elif (target_platform == "google" or (target_platform.startswith("custom_platform_") and api_format == "Google")) and not is_openai_sdk_mode(platform_config):
                 from ModuleFolders.Infrastructure.LLMRequester.GoogleRequester import GoogleRequester
 
                 google_requester = GoogleRequester()
