@@ -21,6 +21,27 @@ from ModuleFolders.Infrastructure.LLMRequester.SdkRequestMode import (
 console = Console()
 
 
+def parse_api_keys_from_text(text: str) -> list[str]:
+    keys = []
+    seen = set()
+    for raw_line in text.splitlines():
+        key = raw_line.lstrip("\ufeff").strip()
+        if not key or key in seen:
+            continue
+        keys.append(key)
+        seen.add(key)
+    return keys
+
+
+def serialize_api_keys_for_config(keys: list[str]) -> str:
+    return ",".join(keys)
+
+
+def read_api_keys_from_txt(file_path: str) -> list[str]:
+    with open(file_path, "r", encoding="utf-8-sig") as handle:
+        return parse_api_keys_from_text(handle.read())
+
+
 def mask_key(key):
     """遮蔽API Key显示"""
     if not key: return ""
@@ -692,6 +713,7 @@ class APIManager:
             table.add_row("[cyan]2.[/]", f"{self.i18n.get('setting_failover_threshold')}: [yellow]{th}[/yellow]")
             table.add_row("[cyan]3.[/]", f"{self.i18n.get('prompt_add_to_pool')}")
             table.add_row("[cyan]4.[/]", f"{self.i18n.get('prompt_remove_from_pool')}")
+            table.add_row("[cyan]5.[/]", f"{self.i18n.get('prompt_import_api_keys_txt')}")
             console.print(table)
 
             if pool:
@@ -702,7 +724,7 @@ class APIManager:
                 console.print(f"\n[dim]{self.i18n.get('msg_api_pool_empty')}[/dim]")
 
             console.print(f"\n[dim]0. {self.i18n.get('menu_back')}[/dim]")
-            c = IntPrompt.ask(self.i18n.get('prompt_select'), choices=["0", "1", "2", "3", "4"], show_choices=False)
+            c = IntPrompt.ask(self.i18n.get('prompt_select'), choices=["0", "1", "2", "3", "4", "5"], show_choices=False)
 
             if c == 0:
                 break
@@ -738,7 +760,57 @@ class APIManager:
                 if sel > 0:
                     pool.pop(sel-1)
                     self.config["backup_apis"] = pool
+            elif c == 5:
+                self.import_api_keys_from_txt()
+                continue
             self.save_config()
+
+    def import_api_keys_from_txt(self):
+        """Import API keys from a text file into the current platform."""
+        current_platform = self.config.get("target_platform", "")
+        if not current_platform:
+            console.print(f"[red]{self.i18n.get('msg_no_active_platform')}[/red]")
+            Prompt.ask(f"\n{self.i18n.get('msg_press_enter')}")
+            return
+
+        platform_conf = self.config.get("platforms", {}).get(current_platform)
+        if not isinstance(platform_conf, dict):
+            console.print(f"[red]{self.i18n.get('msg_no_active_platform')}[/red]")
+            Prompt.ask(f"\n{self.i18n.get('msg_press_enter')}")
+            return
+
+        file_path = Prompt.ask(self.i18n.get("prompt_api_keys_txt_path")).strip().strip('"')
+        if not file_path:
+            return
+
+        try:
+            keys = read_api_keys_from_txt(file_path)
+        except FileNotFoundError:
+            console.print(f"[red]{self.i18n.get('msg_api_keys_txt_not_found')}[/red]")
+            Prompt.ask(f"\n{self.i18n.get('msg_press_enter')}")
+            return
+        except UnicodeDecodeError:
+            console.print(f"[red]{self.i18n.get('msg_api_keys_txt_decode_fail')}[/red]")
+            Prompt.ask(f"\n{self.i18n.get('msg_press_enter')}")
+            return
+        except OSError as exc:
+            console.print(f"[red]{self.i18n.get('msg_api_keys_txt_read_fail')}: {exc}[/red]")
+            Prompt.ask(f"\n{self.i18n.get('msg_press_enter')}")
+            return
+
+        if not keys:
+            console.print(f"[yellow]{self.i18n.get('msg_api_keys_txt_empty')}[/yellow]")
+            Prompt.ask(f"\n{self.i18n.get('msg_press_enter')}")
+            return
+
+        serialized_keys = serialize_api_keys_for_config(keys)
+        self.config["api_key"] = serialized_keys
+        platform_conf["api_key"] = serialized_keys
+        self.save_config()
+        console.print(
+            f"[green]{self.i18n.get('msg_api_keys_txt_imported').format(len(keys), current_platform)}[/green]"
+        )
+        Prompt.ask(f"\n{self.i18n.get('msg_press_enter')}")
 
     def configure_temp_api_for_analysis(self):
         """配置临时API用于术语分析"""
