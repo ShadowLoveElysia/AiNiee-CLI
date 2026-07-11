@@ -1146,6 +1146,41 @@ export const Settings: React.FC = () => {
               <h3 className="text-sm font-semibold text-slate-300 mb-3">{t('feature_proofread_section')}</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Toggle field="enable_auto_proofread" label={t('feature_enable_auto_proofread')} />
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-slate-400 uppercase">{t('setting_proofread_report_mode')}</label>
+                  <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-700 bg-slate-900 p-1">
+                    {(['archive', 'overwrite'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => handleChange('proofread_report_mode', mode)}
+                        className={`min-h-10 rounded-md px-3 py-2 text-xs font-semibold transition-colors ${
+                          (config.proofread_report_mode ?? 'archive') === mode
+                            ? 'bg-primary text-slate-950'
+                            : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        {t(`setting_proofread_report_mode_${mode}`)}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] leading-relaxed text-slate-500">{t('setting_proofread_report_mode_desc')}</p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-slate-400 uppercase">{t('setting_proofread_archive_limit')}</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={999}
+                    value={config.proofread_archive_limit ?? 20}
+                    onChange={(event) => handleChange(
+                      'proofread_archive_limit',
+                      Math.min(Math.max(parseInt(event.target.value) || 0, 0), 999),
+                    )}
+                    className="min-h-11 w-full rounded-lg border border-slate-700 bg-slate-900 p-2.5 text-sm text-slate-200 focus:border-primary"
+                  />
+                  <p className="text-[10px] leading-relaxed text-slate-500">{t('setting_proofread_archive_limit_desc')}</p>
+                </div>
               </div>
             </div>
           </div>

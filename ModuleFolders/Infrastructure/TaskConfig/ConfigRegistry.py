@@ -973,6 +973,29 @@ register_config(ConfigItem(
 ))
 
 register_config(ConfigItem(
+    key="proofread_report_mode",
+    default="archive",
+    level=ConfigLevel.ADVANCED,
+    config_type=ConfigType.CHOICE,
+    i18n_key="setting_proofread_report_mode",
+    i18n_desc_key="setting_proofread_report_mode_desc",
+    choices=["archive", "overwrite"],
+    category="advanced"
+))
+
+register_config(ConfigItem(
+    key="proofread_archive_limit",
+    default=20,
+    level=ConfigLevel.ADVANCED,
+    config_type=ConfigType.INT,
+    i18n_key="setting_proofread_archive_limit",
+    i18n_desc_key="setting_proofread_archive_limit_desc",
+    min_value=0,
+    max_value=999,
+    category="advanced"
+))
+
+register_config(ConfigItem(
     key="proofread_confidence_threshold",
     default=0.7,
     level=ConfigLevel.ADVANCED,

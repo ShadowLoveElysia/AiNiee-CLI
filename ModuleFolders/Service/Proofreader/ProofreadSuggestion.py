@@ -8,7 +8,7 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
 from typing import Any
 
@@ -67,16 +67,35 @@ class ProofreadSuggestion:
     status: ProofreadSuggestionStatus = ProofreadSuggestionStatus.PENDING
     original_translation: str = ""
     applied_translation: str = ""
+    run_id: str = ""
+    status_updated_at: str = ""
+    status_updated_by: str = ""
+    last_action: str = ""
+    accepted_line_hash: str = ""
+    undo_available: bool = False
+    extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        extra = data.pop("extra", {})
         data["status"] = str(self.status)
+        for key, value in extra.items():
+            if key not in data:
+                data[key] = value
         return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ProofreadSuggestion":
-        payload = dict(data)
-        payload["status"] = ProofreadSuggestionStatus(payload.get("status", "pending"))
+        known_fields = {item.name for item in fields(cls)}
+        payload = {key: value for key, value in data.items() if key in known_fields}
+        extra = dict(payload.pop("extra", {}) or {})
+        extra.update({key: value for key, value in data.items() if key not in known_fields})
+        try:
+            payload["status"] = ProofreadSuggestionStatus(payload.get("status", "pending"))
+        except ValueError:
+            payload["status"] = ProofreadSuggestionStatus.PENDING
+            extra["legacy_status"] = data.get("status")
+        payload["extra"] = extra
         return cls(**payload)
 
 
@@ -138,7 +157,11 @@ def suggestion_id_for(batch_id: str, item_id: str, line_hash_value: str, suggest
 
 
 def target_field_for_item(item: CacheItem) -> str:
-    if item.polished_text and item.translation_status == TranslationStatus.POLISHED:
+    if item.polished_text and item.translation_status in {
+        TranslationStatus.POLISHED,
+        TranslationStatus.USER_PROOFREAD,
+        TranslationStatus.AI_PROOFREAD,
+    }:
         return "polished_text"
     return "translated_text"
 

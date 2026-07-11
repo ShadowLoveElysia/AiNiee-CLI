@@ -99,12 +99,13 @@ class AIProofreadMenu:
             table.add_row("[cyan]3.[/]", self._tr("proofread_settings"))
             table.add_row("[cyan]4.[/]", self._tr("proofread_suggestion_review"))
             table.add_row("[cyan]5.[/]", self._tr("proofread_suggestion_review_saved"))
+            table.add_row("[cyan]6.[/]", self._tr("proofread_suggestion_review_archive"))
             console.print(table)
             console.print(f"\n[dim]0. {self._tr('menu_back')}[/dim]")
 
             choice = IntPrompt.ask(
                 f"\n{self._tr('prompt_select')}",
-                choices=["0", "1", "2", "3", "4", "5"],
+                choices=["0", "1", "2", "3", "4", "5", "6"],
                 show_choices=False
             )
 
@@ -122,6 +123,8 @@ class AIProofreadMenu:
                 self._start_proofread_suggestion_review()
             elif choice == 5:
                 self._review_saved_proofread_suggestions()
+            elif choice == 6:
+                self._review_archived_proofread_suggestions()
 
     def _start_ai_proofread(self):
         """开始AI校对当前项目"""
@@ -152,6 +155,22 @@ class AIProofreadMenu:
 
             if not Confirm.ask(self._tr("proofread_suggestion_confirm_generate"), default=False):
                 return
+
+            from ModuleFolders.Service.Proofreader import ProofreadSuggestionStore
+
+            report_mode = str(self.config.get("proofread_report_mode", "archive") or "archive")
+            existing_store = ProofreadSuggestionStore(output_path)
+            existing_store.load()
+            if report_mode == "overwrite" and existing_store.has_report_content():
+                summary = existing_store._build_summary()
+                counts = summary.get("status_counts", {})
+                warning = self._tr("proofread_suggestion_confirm_overwrite").format(
+                    counts.get("pending", 0),
+                    counts.get("accepted", 0),
+                    counts.get("conflict", 0),
+                )
+                if not Confirm.ask(warning, default=False):
+                    return
 
             self._execute_proofread_suggestion_review(output_path)
         except Exception as e:
@@ -204,7 +223,18 @@ class AIProofreadMenu:
         ]
         glossary = self.config.get("prompt_dictionary_data", []) or []
         store = ProofreadSuggestionStore(project_path)
-        store.load()
+        try:
+            archive_limit = max(0, int(self.config.get("proofread_archive_limit", 20)))
+        except (TypeError, ValueError):
+            archive_limit = 20
+        archive_path = store.prepare_new_run(
+            mode=self.config.get("proofread_report_mode", "archive"),
+            provider=str(self.config.get("platform", "") or ""),
+            model=str(self.config.get("model", "") or ""),
+            archive_limit=archive_limit,
+        )
+        if archive_path is not None:
+            console.print(f"[cyan]{self._tr('proofread_suggestion_archived').format(archive_path)}[/cyan]")
 
         total_tokens = 0
         suggestions_found = 0
@@ -314,6 +344,7 @@ class AIProofreadMenu:
         console.print(
             f"[green]{self._tr('proofread_suggestion_generation_done').format(total_tokens, suggestions_found, closed_batches)}[/green]"
         )
+        store.mark_generation_completed()
         if store.report_path.exists():
             console.print(f"[green]{self._tr('proofread_suggestion_report_saved').format(store.report_path)}[/green]")
 
@@ -323,12 +354,11 @@ class AIProofreadMenu:
             return
 
         tui = ProofreadSuggestionTUI(console, self.i18n)
-        review_result = tui.run(store, project)
+        manager = CacheManager()
+        manager.project = project
+        manager.save_to_file_require_path = project_path
+        review_result = tui.run(store, project, save_project=manager.save_to_file)
         if review_result.accepted > 0:
-            manager = CacheManager()
-            manager.project = project
-            manager.save_to_file_require_path = project_path
-            manager.save_to_file()
             console.print(f"[green]{self._tr('proofread_suggestion_saved_cache').format(review_result.accepted)}[/green]")
         console.print(
             f"[cyan]{self._tr('proofread_suggestion_review_summary').format(review_result.accepted, review_result.rejected, review_result.ignored, review_result.conflicts)}[/cyan]"
@@ -355,19 +385,150 @@ class AIProofreadMenu:
             return
 
         store = ProofreadSuggestionStore(project_path)
-        if not store.load_report():
+        if store.path.exists():
+            store.load()
+        elif not store.load_report():
             console.print(f"[yellow]{self._tr('proofread_suggestion_no_saved_report')}[/yellow]")
             self._press_enter()
             return
 
+        self._review_loaded_proofread_store(project_path, store)
+
+    def _review_archived_proofread_suggestions(self):
+        try:
+            output_path = self._select_archived_proofread_project()
+            if not output_path:
+                return
+            cache_file = os.path.join(output_path, "cache", "AinieeCacheData.json")
+            if not os.path.exists(cache_file):
+                console.print(f"[red]{self._tr('proofread_no_cache')}[/red]")
+                self._press_enter()
+                return
+
+            from ModuleFolders.Service.Proofreader import ProofreadSuggestionStore
+
+            store = ProofreadSuggestionStore(output_path)
+            archives = store.archive_summaries()
+            if not archives:
+                console.print(f"[yellow]{self._tr('proofread_suggestion_archive_empty')}[/yellow]")
+                self._press_enter()
+                return
+
+            console.print(Panel(f"[bold]{self._tr('proofread_suggestion_archive_title')}[/bold]"))
+            table = Table(show_header=False, box=None)
+            for index, archive in enumerate(archives, start=1):
+                run = archive.get("run", {})
+                summary = archive.get("summary", {})
+                counts = summary.get("status_counts", {})
+                table.add_row(
+                    f"[cyan]{index}.[/]",
+                    self._tr("proofread_suggestion_archive_option").format(
+                        archive.get("modified_time", "-"),
+                        run.get("model", "") or "-",
+                        summary.get("total_suggestions", 0),
+                        counts.get("pending", 0),
+                        counts.get("accepted", 0),
+                        counts.get("conflict", 0),
+                    ),
+                )
+            console.print(table)
+            console.print(f"\n[dim]0. {self._tr('menu_back')}[/dim]")
+            choice = IntPrompt.ask(
+                self._tr("proofread_suggestion_archive_prompt"),
+                choices=[str(index) for index in range(len(archives) + 1)],
+                show_choices=False,
+            )
+            if choice == 0:
+                return
+
+            store.load_archive(archives[choice - 1]["path"])
+            self._review_loaded_proofread_store(output_path, store)
+        except Exception as e:
+            console.print(f"[red]{self._tr('proofread_error')}: {e}[/red]")
+            self._press_enter()
+
+    def _select_archived_proofread_project(self) -> str:
+        from ModuleFolders.Service.Proofreader import ProofreadSuggestionStore
+
+        configured_path = os.path.abspath(self.config.get("label_output_path", "./output"))
+        candidates: dict[str, dict] = {}
+        try:
+            scanned_projects = self.host._scan_cache_files()
+        except Exception:
+            scanned_projects = []
+        fallback_paths = [configured_path]
+        fallback_paths.extend(self.config.get("recent_projects", []) or [])
+        for path in fallback_paths:
+            normalized = os.path.abspath(str(path or ""))
+            if os.path.exists(os.path.join(normalized, "cache", "AinieeCacheData.json")):
+                scanned_projects.append({"path": normalized, "name": os.path.basename(normalized)})
+
+        for project in scanned_projects:
+            path = os.path.abspath(str(project.get("path", "") or ""))
+            if not path or path in candidates:
+                continue
+            archive_count = len(ProofreadSuggestionStore(path).list_archives())
+            if archive_count:
+                candidates[path] = {
+                    "name": project.get("name", "") or os.path.basename(path),
+                    "archive_count": archive_count,
+                }
+        if configured_path not in candidates:
+            archive_count = len(ProofreadSuggestionStore(configured_path).list_archives())
+            if archive_count:
+                candidates[configured_path] = {
+                    "name": os.path.basename(configured_path) or configured_path,
+                    "archive_count": archive_count,
+                }
+
+        console.print(Panel(f"[bold]{self._tr('proofread_suggestion_archive_project_title')}[/bold]"))
+        table = Table(show_header=False, box=None)
+        table.add_row("[cyan]1.[/]", self._tr("proofread_suggestion_archive_project_manual"))
+        project_paths = list(candidates)
+        for index, path in enumerate(project_paths, start=2):
+            candidate = candidates[path]
+            table.add_row(
+                f"[cyan]{index}.[/]",
+                self._tr("proofread_suggestion_archive_project_option").format(
+                    candidate["name"],
+                    candidate["archive_count"],
+                    path,
+                ),
+            )
+        console.print(table)
+        console.print(f"\n[dim]0. {self._tr('menu_back')}[/dim]")
+        choice = IntPrompt.ask(
+            self._tr("proofread_suggestion_archive_project_prompt"),
+            choices=[str(index) for index in range(len(project_paths) + 2)],
+            show_choices=False,
+        )
+        if choice == 0:
+            return ""
+        if choice == 1:
+            return os.path.abspath(
+                Prompt.ask(
+                    self._tr("proofread_suggestion_archive_project_path"),
+                    default=configured_path,
+                ).strip()
+            )
+        return project_paths[choice - 2]
+
+    def _review_loaded_proofread_store(self, project_path: str, store):
+        from ModuleFolders.UserInterface.Proofreader import ProofreadSuggestionTUI
+
+        cache_file = os.path.join(project_path, "cache", "AinieeCacheData.json")
         project = CacheManager.read_from_file(cache_file)
         tui = ProofreadSuggestionTUI(console, self.i18n)
-        review_result = tui.run(store, project, reload_store=False)
+        manager = CacheManager()
+        manager.project = project
+        manager.save_to_file_require_path = project_path
+        review_result = tui.run(
+            store,
+            project,
+            reload_store=False,
+            save_project=manager.save_to_file,
+        )
         if review_result.accepted > 0:
-            manager = CacheManager()
-            manager.project = project
-            manager.save_to_file_require_path = project_path
-            manager.save_to_file()
             console.print(f"[green]{self._tr('proofread_suggestion_saved_cache').format(review_result.accepted)}[/green]")
         console.print(
             f"[cyan]{self._tr('proofread_suggestion_review_summary').format(review_result.accepted, review_result.rejected, review_result.ignored, review_result.conflicts)}[/cyan]"
@@ -839,31 +1000,55 @@ class AIProofreadMenu:
         """校对设置菜单"""
         while True:
             self.host.display_banner()
-            console.print(Panel("[bold]校对设置[/bold]"))
+            console.print(Panel(f"[bold]{self._tr('proofread_settings')}[/bold]"))
 
             context_lines = self.config.get("proofread_context_lines", 5)
             batch_size = self.config.get("proofread_batch_size", 20)
             threshold = self.config.get("proofread_confidence_threshold", 0.7)
+            report_mode = str(self.config.get("proofread_report_mode", "archive") or "archive")
+            archive_limit = self.config.get("proofread_archive_limit", 20)
 
             table = Table(show_header=False, box=None)
-            table.add_row("[cyan]1.[/]", f"上下文行数: {context_lines}")
-            table.add_row("[cyan]2.[/]", f"批量大小: {batch_size}")
-            table.add_row("[cyan]3.[/]", f"置信度阈值: {threshold}")
+            table.add_row("[cyan]1.[/]", f"{self._tr('setting_proofread_context_lines')}: {context_lines}")
+            table.add_row("[cyan]2.[/]", f"{self._tr('setting_proofread_batch_size')}: {batch_size}")
+            table.add_row("[cyan]3.[/]", f"{self._tr('setting_proofread_confidence_threshold')}: {threshold}")
+            table.add_row(
+                "[cyan]4.[/]",
+                f"{self._tr('setting_proofread_report_mode')}: {self._tr(f'setting_proofread_report_mode_{report_mode}')}",
+            )
+            table.add_row("[cyan]5.[/]", f"{self._tr('setting_proofread_archive_limit')}: {archive_limit}")
             console.print(table)
-            console.print(f"\n[dim]0. 返回[/dim]")
+            console.print(f"\n[dim]0. {self._tr('menu_back')}[/dim]")
 
-            choice = IntPrompt.ask("请选择", choices=["0", "1", "2", "3"])
+            choice = IntPrompt.ask(
+                self._tr("prompt_select"),
+                choices=["0", "1", "2", "3", "4", "5"],
+                show_choices=False,
+            )
 
             if choice == 0:
                 break
             elif choice == 1:
-                new_val = IntPrompt.ask("上下文行数", default=context_lines)
+                new_val = IntPrompt.ask(self._tr("setting_proofread_context_lines"), default=context_lines)
                 self.config["proofread_context_lines"] = new_val
             elif choice == 2:
-                new_val = IntPrompt.ask("批量大小", default=batch_size)
+                new_val = IntPrompt.ask(self._tr("setting_proofread_batch_size"), default=batch_size)
                 self.config["proofread_batch_size"] = new_val
             elif choice == 3:
-                new_val = Prompt.ask("置信度阈值", default=str(threshold))
+                new_val = Prompt.ask(self._tr("setting_proofread_confidence_threshold"), default=str(threshold))
                 self.config["proofread_confidence_threshold"] = float(new_val)
+            elif choice == 4:
+                new_val = Prompt.ask(
+                    self._tr("setting_proofread_report_mode"),
+                    choices=["archive", "overwrite"],
+                    default=report_mode,
+                )
+                self.config["proofread_report_mode"] = new_val
+            elif choice == 5:
+                new_val = IntPrompt.ask(
+                    self._tr("setting_proofread_archive_limit"),
+                    default=archive_limit,
+                )
+                self.config["proofread_archive_limit"] = min(max(new_val, 0), 999)
 
             self.host.save_config()

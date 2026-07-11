@@ -1,7 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { AlertTriangle, ArchiveRestore, DatabaseBackup, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { AlertTriangle, ArchiveRestore, DatabaseBackup, FileCheck2, ListChecks, RefreshCw } from 'lucide-react';
 import { useI18n } from '../contexts/I18nContext';
 import { useGlobal } from '../contexts/GlobalContext';
+import {
+  ProofreadInlineSuggestion,
+  ProofreadLineGroup,
+  ProofreadQuickNavigator,
+  ProofreadReportOption,
+  ProofreadReportPanel,
+  ProofreadSummary,
+  ProofreadSuggestionStatus,
+  WebProofreadSuggestion,
+} from '../components/ProofreadReviewOverlays';
 
 interface CacheItem {
   id: number;
@@ -44,7 +54,7 @@ interface Pagination {
 
 // AI Proofread interfaces
 interface ProofreadIssue {
-  id: number;
+  id: number | string;
   text_index: number;
   file_path: string;
   source: string;
@@ -54,6 +64,15 @@ interface ProofreadIssue {
   severity: string;
   description: string;
   accepted: boolean;
+}
+
+interface ProofreadReportPayload {
+  report_file: string;
+  is_archive: boolean;
+  run: Record<string, any>;
+  review_state: Record<string, any>;
+  summary: ProofreadSummary;
+  suggestions: WebProofreadSuggestion[];
 }
 
 interface ProofreadState {
@@ -158,7 +177,6 @@ export const CacheEditor: React.FC = () => {
   const [currentLine, setCurrentLine] = useState(() => savedState?.currentLine || 0);
 
   // AI Proofread state
-  const [showProofread, setShowProofread] = useState(false);
   const [proofreadPath, setProofreadPath] = useState('');
   const [proofreadState, setProofreadState] = useState<ProofreadState>(() =>
     loadProofreadState() || {
@@ -171,8 +189,20 @@ export const CacheEditor: React.FC = () => {
       completed: false
     }
   );
-  const [editingIssue, setEditingIssue] = useState<number | null>(null);
-  const [editingIssueText, setEditingIssueText] = useState('');
+  const [proofreadReports, setProofreadReports] = useState<ProofreadReportOption[]>([]);
+  const [activeProofreadReport, setActiveProofreadReport] = useState('');
+  const [proofreadSuggestions, setProofreadSuggestions] = useState<WebProofreadSuggestion[]>([]);
+  const [proofreadRun, setProofreadRun] = useState<Record<string, any>>({});
+  const [proofreadSummary, setProofreadSummary] = useState<ProofreadSummary>({});
+  const [proofreadFilter, setProofreadFilter] = useState('pending');
+  const [currentProofreadIndex, setCurrentProofreadIndex] = useState(0);
+  const [expandedProofreadItemId, setExpandedProofreadItemId] = useState('');
+  const [proofreadSuggestionOffsets, setProofreadSuggestionOffsets] = useState<Record<string, number>>({});
+  const [proofreadActionBusy, setProofreadActionBusy] = useState(false);
+  const [reportPanelCollapsed, setReportPanelCollapsed] = useState(false);
+  const [quickNavigatorCollapsed, setQuickNavigatorCollapsed] = useState(false);
+  const [mobileReportOpen, setMobileReportOpen] = useState(false);
+  const [mobileNavigatorOpen, setMobileNavigatorOpen] = useState(false);
 
   // Single line AI Analysis state
   const [analyzingLine, setAnalyzingLine] = useState(false);
@@ -187,6 +217,252 @@ export const CacheEditor: React.FC = () => {
   const sourceScrollRef = useRef<HTMLDivElement>(null);
   const translationScrollRef = useRef<HTMLDivElement>(null);
   const scrollSyncActive = useRef<boolean>(false);
+  const pendingProofreadTarget = useRef<{ filePath: string; textIndex: number } | null>(null);
+
+  const groupProofreadSuggestions = (suggestions: WebProofreadSuggestion[]): ProofreadLineGroup[] => {
+    const grouped = new Map<string, WebProofreadSuggestion[]>();
+    suggestions.forEach((suggestion) => {
+      const items = grouped.get(suggestion.item_id) || [];
+      items.push(suggestion);
+      grouped.set(suggestion.item_id, items);
+    });
+    const statusPriority: Record<ProofreadSuggestionStatus, number> = {
+      conflict: 6,
+      pending: 5,
+      accepted: 4,
+      ignored: 3,
+      rejected: 2,
+      stale: 1,
+    };
+    return Array.from(grouped.entries()).map(([itemId, items]) => {
+      const displayStatus = [...items].sort(
+        (left, right) => statusPriority[right.status] - statusPriority[left.status]
+      )[0]?.status || 'stale';
+      return {
+        item_id: itemId,
+        file_path: items[0].file_path,
+        text_index: items[0].text_index,
+        suggestions: items,
+        displayStatus,
+        highestSeverity: items.some((item) => item.severity === 'high') ? 'high' : 'medium',
+      };
+    });
+  };
+
+  const allProofreadGroups = useMemo(
+    () => groupProofreadSuggestions(proofreadSuggestions),
+    [proofreadSuggestions]
+  );
+  const visibleProofreadGroups = useMemo(
+    () => proofreadFilter === 'all'
+      ? allProofreadGroups
+      : allProofreadGroups.filter((group) =>
+          group.suggestions.some((suggestion) => suggestion.status === proofreadFilter)
+        ),
+    [allProofreadGroups, proofreadFilter]
+  );
+  const proofreadGroupByItemId = useMemo(
+    () => new Map(allProofreadGroups.map((group) => [group.item_id, group])),
+    [allProofreadGroups]
+  );
+
+  const applyProofreadReport = (payload: ProofreadReportPayload) => {
+    const nextSuggestions = payload.suggestions || [];
+    setActiveProofreadReport(payload.report_file || '');
+    setProofreadSuggestions(nextSuggestions);
+    setProofreadRun(payload.run || {});
+    setProofreadSummary(payload.summary || {});
+    const nextFilter = String(payload.review_state?.active_filter || 'pending');
+    setProofreadFilter(nextFilter);
+    const currentSuggestionId = String(payload.review_state?.current_suggestion_id || '');
+    if (currentSuggestionId) {
+      const suggestion = nextSuggestions.find(
+        (item) => item.suggestion_id === currentSuggestionId
+      );
+      if (suggestion) {
+        const sameLine = nextSuggestions.filter((item) => item.item_id === suggestion.item_id);
+        setExpandedProofreadItemId(suggestion.item_id);
+        setProofreadSuggestionOffsets((current) => ({
+          ...current,
+          [suggestion.item_id]: Math.max(0, sameLine.findIndex(
+            (item) => item.suggestion_id === currentSuggestionId
+          )),
+        }));
+      }
+    } else {
+      setExpandedProofreadItemId('');
+    }
+  };
+
+  const reportQueryFile = (file = activeProofreadReport) =>
+    file && file !== 'ProofreadSuggestions.json' ? file : '';
+
+  const loadProofreadReport = async (file = activeProofreadReport, path = projectPath) => {
+    if (!path.trim()) return;
+    const params = new URLSearchParams({ project_path: path });
+    const reportFile = reportQueryFile(file);
+    if (reportFile) params.set('report_file', reportFile);
+    const response = await fetch(`/api/proofread/suggestions?${params}`);
+    if (response.status === 404) {
+      setProofreadSuggestions([]);
+      setProofreadSummary({});
+      return;
+    }
+    if (!response.ok) throw new Error(t('cache_editor_proofread_report_load_failed'));
+    applyProofreadReport(await response.json());
+  };
+
+  const loadProofreadReports = async (path = projectPath, preserveSelection = true) => {
+    if (!path.trim()) return;
+    const response = await fetch(`/api/proofread/reports?project_path=${encodeURIComponent(path)}`);
+    if (!response.ok) throw new Error(t('cache_editor_proofread_report_load_failed'));
+    const data = await response.json();
+    const options: ProofreadReportOption[] = [];
+    if (data.current) {
+      options.push({
+        ...data.current,
+        file: data.current.file || 'ProofreadSuggestions.json',
+        is_archive: false,
+      });
+    }
+    (data.archives || []).forEach((archive: any) => options.push({
+      file: archive.file,
+      is_archive: true,
+      modified_time: archive.modified_time,
+      run: archive.run,
+      summary: archive.summary,
+    }));
+    setProofreadReports(options);
+    const selected = preserveSelection && options.some((option) => option.file === activeProofreadReport)
+      ? activeProofreadReport
+      : options[0]?.file || '';
+    setActiveProofreadReport(selected);
+    if (selected) {
+      await loadProofreadReport(selected, path);
+    } else {
+      setProofreadSuggestions([]);
+      setProofreadRun({});
+      setProofreadSummary({});
+      setExpandedProofreadItemId('');
+      setCurrentProofreadIndex(0);
+    }
+  };
+
+  const persistProofreadReviewState = async (suggestionId?: string, filter = proofreadFilter) => {
+    if (!projectPath.trim() || !activeProofreadReport) return;
+    await fetch('/api/proofread/review-state', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_path: projectPath,
+        report_file: reportQueryFile() || null,
+        current_suggestion_id: suggestionId,
+        active_filter: filter,
+      }),
+    });
+  };
+
+  const runProofreadAction = async (
+    suggestionId: string,
+    action: 'accept' | 'reject' | 'ignore' | 'restore'
+  ) => {
+    const previousFilter = proofreadFilter;
+    const previousSuggestion = proofreadSuggestions.find(
+      (suggestion) => suggestion.suggestion_id === suggestionId
+    );
+    const previousGroupIndex = previousSuggestion
+      ? visibleProofreadGroups.findIndex((group) => group.item_id === previousSuggestion.item_id)
+      : currentProofreadIndex;
+    setProofreadActionBusy(true);
+    try {
+      const response = await fetch(`/api/proofread/suggestions/${suggestionId}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_path: projectPath,
+          report_file: reportQueryFile() || null,
+        }),
+      });
+      const data = await response.json();
+      const report = data.report as ProofreadReportPayload | undefined;
+      if (report) applyProofreadReport(report);
+      if (!response.ok) throw new Error(data.message || t('cache_editor_proofread_action_failed'));
+      if (action === 'accept') await loadCacheItems(currentPage, searchQuery);
+
+      if (report) {
+        const nextFilter = String(report.review_state?.active_filter || previousFilter);
+        const nextAllGroups = groupProofreadSuggestions(report.suggestions || []);
+        const nextVisibleGroups = nextFilter === 'all'
+          ? nextAllGroups
+          : nextAllGroups.filter((group) =>
+              group.suggestions.some((suggestion) => suggestion.status === nextFilter)
+            );
+        const sameLineGroup = previousSuggestion
+          ? nextVisibleGroups.find((group) => group.item_id === previousSuggestion.item_id)
+          : undefined;
+        const sameLineSuggestion = sameLineGroup?.suggestions.find((suggestion) =>
+          suggestion.suggestion_id !== suggestionId
+          && (
+            nextFilter === 'all'
+              ? suggestion.status === 'pending' || suggestion.status === 'conflict'
+              : suggestion.status === nextFilter
+          )
+        );
+        let targetGroup = sameLineSuggestion ? sameLineGroup : undefined;
+        if (!targetGroup && nextVisibleGroups.length > 0) {
+          const targetIndex = Math.min(Math.max(previousGroupIndex, 0), nextVisibleGroups.length - 1);
+          targetGroup = nextVisibleGroups[targetIndex];
+        }
+        if (targetGroup) {
+          const targetIndex = nextVisibleGroups.findIndex(
+            (group) => group.item_id === targetGroup?.item_id
+          );
+          const targetSuggestion = sameLineSuggestion
+            || targetGroup.suggestions.find((suggestion) => suggestion.status === nextFilter)
+            || targetGroup.suggestions.find((suggestion) =>
+              suggestion.status === 'pending' || suggestion.status === 'conflict'
+            )
+            || targetGroup.suggestions[0];
+          await navigateToProofreadGroupData(
+            targetGroup,
+            targetIndex,
+            nextFilter,
+            targetSuggestion?.suggestion_id,
+          );
+        } else {
+          setCurrentProofreadIndex(0);
+          setExpandedProofreadItemId('');
+          await persistProofreadReviewState('', nextFilter);
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('cache_editor_proofread_action_failed'));
+    } finally {
+      setProofreadActionBusy(false);
+    }
+  };
+
+  const undoProofreadAction = async () => {
+    setProofreadActionBusy(true);
+    try {
+      const response = await fetch('/api/proofread/undo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_path: projectPath,
+          report_file: reportQueryFile() || null,
+        }),
+      });
+      const data = await response.json();
+      if (data.report) applyProofreadReport(data.report);
+      if (!response.ok) throw new Error(data.message || t('cache_editor_proofread_nothing_to_undo'));
+      await loadCacheItems(currentPage, searchQuery);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('cache_editor_proofread_nothing_to_undo'));
+    } finally {
+      setProofreadActionBusy(false);
+    }
+  };
 
   // Save state to localStorage whenever key values change
   useEffect(() => {
@@ -217,6 +493,10 @@ export const CacheEditor: React.FC = () => {
           setProofreadState(status);
           if (!status.running) {
             clearInterval(pollInterval);
+            setActiveProofreadReport('');
+            loadProofreadReports(proofreadPath || projectPath, false).catch((err) => {
+              console.error('Failed to refresh proofread reports:', err);
+            });
           }
         }
       } catch (err) {
@@ -283,6 +563,35 @@ export const CacheEditor: React.FC = () => {
     }
   }, [cacheStatus.loaded, currentPage, searchQuery, pageSize]);
 
+  useEffect(() => {
+    const target = pendingProofreadTarget.current;
+    if (!target || cacheItems.length === 0) return;
+    const rowIndex = cacheItems.findIndex(
+      (item) => item.file_path === target.filePath && item.text_index === target.textIndex
+    );
+    if (rowIndex < 0) return;
+    pendingProofreadTarget.current = null;
+    setCurrentLine(rowIndex);
+    setExpandedProofreadItemId(`${target.filePath}:${target.textIndex}`);
+    alignRowsInBothPanes(rowIndex);
+  }, [cacheItems]);
+
+  useEffect(() => {
+    if (visibleProofreadGroups.length === 0) {
+      setCurrentProofreadIndex(0);
+      return;
+    }
+    setCurrentProofreadIndex((value) => Math.min(value, visibleProofreadGroups.length - 1));
+  }, [visibleProofreadGroups.length]);
+
+  useEffect(() => {
+    if (!expandedProofreadItemId) return;
+    const index = visibleProofreadGroups.findIndex(
+      (group) => group.item_id === expandedProofreadItemId
+    );
+    if (index >= 0) setCurrentProofreadIndex(index);
+  }, [expandedProofreadItemId, visibleProofreadGroups]);
+
   // Restore row alignment after data loads
   useEffect(() => {
     if (cacheItems.length > 0 && currentLine >= 0 && currentLine < cacheItems.length) {
@@ -348,6 +657,8 @@ export const CacheEditor: React.FC = () => {
 
       await response.json();
       await checkCacheStatus(); // Refresh status
+      setProofreadPath(projectPath);
+      await loadProofreadReports(projectPath, false);
       setError(null);
       setBackupMessage(null);
       if (showBackups) {
@@ -381,6 +692,8 @@ export const CacheEditor: React.FC = () => {
     }
 
     await checkCacheStatus(); // Refresh status
+    setProofreadPath(path);
+    await loadProofreadReports(path, false);
     console.log('Cache restored from saved path:', path);
     return { needsBackupRestore: false };
   };
@@ -447,6 +760,9 @@ export const CacheEditor: React.FC = () => {
       await checkCacheStatus();
       setCurrentPage(1);
       await loadCacheItems(1);
+      if (activeProofreadReport) {
+        await loadProofreadReport(activeProofreadReport, projectPath);
+      }
       setShowBackups(false);
       setCacheBackups([]);
       setError(null);
@@ -511,6 +827,10 @@ export const CacheEditor: React.FC = () => {
             : item
         )
       );
+
+      if (activeProofreadReport) {
+        await loadProofreadReport(activeProofreadReport, projectPath);
+      }
 
       setEditingItem(null);
       setEditingText('');
@@ -597,14 +917,37 @@ export const CacheEditor: React.FC = () => {
     }
 
     try {
-      const response = await fetch('/api/proofread/start', {
+      let response = await fetch('/api/proofread/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project_path: proofreadPath })
       });
+      if (response.status === 409) {
+        const conflict = await response.json();
+        if (conflict.detail?.code === 'proofread_overwrite_confirmation_required') {
+          const counts = conflict.detail.summary?.status_counts || {};
+          const confirmed = window.confirm(
+            t(
+              'cache_editor_proofread_overwrite_confirm',
+              counts.pending || 0,
+              counts.accepted || 0,
+              counts.conflict || 0,
+            )
+          );
+          if (!confirmed) return;
+          response = await fetch('/api/proofread/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              project_path: proofreadPath,
+              report_mode: 'overwrite',
+              overwrite_confirmed: true,
+            }),
+          });
+        }
+      }
       if (response.ok) {
         setProofreadState(prev => ({ ...prev, running: true, error: null, completed: false }));
-        setShowProofread(true);
       } else {
         const data = await response.json();
         setError(data.detail || t('cache_editor_proofread_error'));
@@ -622,46 +965,6 @@ export const CacheEditor: React.FC = () => {
       setProofreadState(prev => ({ ...prev, running: false }));
     } catch (err) {
       console.error('Failed to stop proofread:', err);
-    }
-  };
-
-  const acceptIssue = async (issueId: number) => {
-    try {
-      const response = await fetch(`/api/proofread/accept?issue_id=${issueId}`, { method: 'POST' });
-      if (response.ok) {
-        setProofreadState(prev => ({
-          ...prev,
-          issues: prev.issues.map(iss =>
-            iss.id === issueId ? { ...iss, accepted: true } : iss
-          )
-        }));
-        // Reload cache items to reflect changes
-        await loadCacheItems();
-      }
-    } catch (err) {
-      console.error('Failed to accept issue:', err);
-    }
-  };
-
-  const skipIssue = (issueId: number) => {
-    setProofreadState(prev => ({
-      ...prev,
-      issues: prev.issues.filter(iss => iss.id !== issueId)
-    }));
-  };
-
-  const clearProofreadIssues = async () => {
-    try {
-      await fetch('/api/proofread/clear', { method: 'POST' });
-      setProofreadState(prev => ({ ...prev, issues: [], completed: false }));
-    } catch (err) {
-      console.error('Failed to clear issues:', err);
-    }
-  };
-
-  const acceptAllIssues = async () => {
-    for (const issue of proofreadState.issues.filter(iss => !iss.accepted && iss.corrected_translation)) {
-      await acceptIssue(issue.id);
     }
   };
 
@@ -691,6 +994,59 @@ export const CacheEditor: React.FC = () => {
     }, 0);
   };
 
+  const navigateToProofreadGroupData = async (
+    group: ProofreadLineGroup,
+    index: number,
+    filter = proofreadFilter,
+    suggestionId?: string,
+  ) => {
+    setCurrentProofreadIndex(index);
+    setExpandedProofreadItemId(group.item_id);
+    const activeSuggestion = group.suggestions.find((item) => item.suggestion_id === suggestionId)
+      || group.suggestions.find((item) => item.status === filter)
+      || group.suggestions.find((item) => item.status === 'pending' || item.status === 'conflict')
+      || group.suggestions[0];
+    if (activeSuggestion) {
+      setProofreadSuggestionOffsets((current) => ({
+        ...current,
+        [group.item_id]: group.suggestions.indexOf(activeSuggestion),
+      }));
+    }
+    persistProofreadReviewState(activeSuggestion?.suggestion_id, filter).catch(() => undefined);
+    try {
+      const params = new URLSearchParams({
+        project_path: projectPath,
+        file_path: group.file_path,
+        text_index: String(group.text_index),
+        page_size: String(pageSize),
+      });
+      const response = await fetch(`/api/proofread/locate?${params}`);
+      if (!response.ok) throw new Error(t('cache_editor_proofread_locate_failed'));
+      const location = await response.json();
+      pendingProofreadTarget.current = {
+        filePath: group.file_path,
+        textIndex: group.text_index,
+      };
+      if (searchQuery) setSearchQuery('');
+      if (currentPage !== location.page || searchQuery) {
+        setCurrentPage(location.page);
+        await loadCacheItems(location.page, '');
+      } else {
+        setCurrentLine(location.row_index);
+        alignRowsInBothPanes(location.row_index);
+        pendingProofreadTarget.current = null;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('cache_editor_proofread_locate_failed'));
+    }
+  };
+
+  const navigateToProofreadGroup = async (index: number) => {
+    const group = visibleProofreadGroups[index];
+    if (!group) return;
+    await navigateToProofreadGroupData(group, index);
+  };
+
   const handleRowClick = (index: number) => {
     setCurrentLine(index);
     alignRowsInBothPanes(index);
@@ -700,6 +1056,58 @@ export const CacheEditor: React.FC = () => {
     setCurrentLine(index);
     handleEditStart(item);
     alignRowsInBothPanes(index);
+  };
+
+  const activeSuggestionIndexForGroup = (group?: ProofreadLineGroup) => {
+    if (!group || group.suggestions.length === 0) return -1;
+    if (Object.prototype.hasOwnProperty.call(proofreadSuggestionOffsets, group.item_id)) {
+      return Math.min(
+        Math.max(proofreadSuggestionOffsets[group.item_id], 0),
+        group.suggestions.length - 1,
+      );
+    }
+    const filteredIndex = group.suggestions.findIndex(
+      (suggestion) => suggestion.status === proofreadFilter
+    );
+    if (filteredIndex >= 0) return filteredIndex;
+    const actionableIndex = group.suggestions.findIndex(
+      (suggestion) => suggestion.status === 'pending' || suggestion.status === 'conflict'
+    );
+    return actionableIndex >= 0 ? actionableIndex : 0;
+  };
+
+  const activeSuggestionForGroup = (group?: ProofreadLineGroup) => {
+    if (!group || group.suggestions.length === 0) return undefined;
+    return group.suggestions[activeSuggestionIndexForGroup(group)];
+  };
+
+  const moveInlineSuggestion = (group: ProofreadLineGroup, delta: number) => {
+    setProofreadSuggestionOffsets((current) => {
+      const offset = activeSuggestionIndexForGroup(group);
+      const next = (offset + delta + group.suggestions.length) % group.suggestions.length;
+      return { ...current, [group.item_id]: next };
+    });
+  };
+
+  const rowProofreadClass = (group?: ProofreadLineGroup) => {
+    if (group?.displayStatus === 'conflict') return 'border-l-2 border-l-rose-400 bg-rose-400/[0.055]';
+    if (group?.displayStatus === 'pending') return 'border-l-2 border-l-amber-300 bg-amber-300/[0.055]';
+    return 'border-l-2 border-l-transparent';
+  };
+
+  const rowProofreadMarker = (group?: ProofreadLineGroup) => {
+    if (!group) return '';
+    if (group.displayStatus === 'pending') return '#';
+    if (group.displayStatus === 'conflict') return '!';
+    if (group.displayStatus === 'accepted') return '*';
+    return '';
+  };
+
+  const rowProofreadMarkerClass = (group?: ProofreadLineGroup) => {
+    if (group?.displayStatus === 'pending') return 'text-amber-300';
+    if (group?.displayStatus === 'conflict') return 'text-rose-300';
+    if (group?.displayStatus === 'accepted') return 'text-emerald-300';
+    return 'text-slate-600';
   };
 
   // Keyboard navigation (only Enter and Esc)
@@ -942,16 +1350,12 @@ export const CacheEditor: React.FC = () => {
             ) : null}
             {t('cache_editor_start_proofread')}
           </button>
-          {proofreadState.issues.length > 0 && (
+          {proofreadState.running && (
             <button
-              onClick={() => setShowProofread(!showProofread)}
-              className={`px-4 py-2 rounded-lg text-white transition-all flex items-center gap-2 text-sm font-bold border border-white/10 ${
-                showProofread 
-                    ? (elysiaActive ? 'bg-pink-500 shadow-lg shadow-pink-500/30' : 'bg-blue-600 shadow-lg') 
-                    : 'bg-white/5 hover:bg-white/10 text-slate-400'
-              }`}
+              onClick={stopProofread}
+              className="px-4 py-2 rounded-lg border border-rose-400/25 bg-rose-400/10 text-rose-300 text-sm font-bold"
             >
-              {showProofread ? t('cache_editor_proofread_hide_panel') : t('cache_editor_proofread_view_suggestions', proofreadState.issues.filter(i => !i.accepted).length)}
+              {t('cache_editor_stop_proofread')} {proofreadState.progress}/{proofreadState.total}
             </button>
           )}
         </div>
@@ -1030,6 +1434,108 @@ export const CacheEditor: React.FC = () => {
               </div>
             </div>
 
+            {proofreadReports.length > 0 && (
+              <>
+                <div className="pointer-events-none absolute left-4 top-12 z-30 hidden xl:block">
+                  <ProofreadReportPanel
+                    t={t}
+                    options={proofreadReports}
+                    activeFile={activeProofreadReport}
+                    run={proofreadRun}
+                    summary={proofreadSummary}
+                    filter={proofreadFilter}
+                    collapsed={reportPanelCollapsed}
+                    onToggle={() => setReportPanelCollapsed((value) => !value)}
+                    onUndo={undoProofreadAction}
+                    onSelectReport={(file) => {
+                      setActiveProofreadReport(file);
+                      loadProofreadReport(file).catch((err) => setError(String(err)));
+                    }}
+                    onFilter={(filter) => {
+                      setProofreadFilter(filter);
+                      setCurrentProofreadIndex(0);
+                      persistProofreadReviewState(undefined, filter).catch(() => undefined);
+                    }}
+                  />
+                </div>
+                <div className="pointer-events-none absolute right-4 top-1/2 z-30 hidden -translate-y-1/2 xl:block">
+                  <ProofreadQuickNavigator
+                    t={t}
+                    groups={visibleProofreadGroups}
+                    index={currentProofreadIndex}
+                    collapsed={quickNavigatorCollapsed}
+                    onToggle={() => setQuickNavigatorCollapsed((value) => !value)}
+                    onSelect={navigateToProofreadGroup}
+                  />
+                </div>
+                <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30 flex items-end justify-between gap-3 xl:hidden">
+                  <div className="pointer-events-auto">
+                    {mobileReportOpen ? (
+                      <ProofreadReportPanel
+                        t={t}
+                        options={proofreadReports}
+                        activeFile={activeProofreadReport}
+                        run={proofreadRun}
+                        summary={proofreadSummary}
+                        filter={proofreadFilter}
+                        collapsed={false}
+                        onToggle={() => setMobileReportOpen(false)}
+                        onUndo={undoProofreadAction}
+                        onSelectReport={(file) => {
+                          setActiveProofreadReport(file);
+                          loadProofreadReport(file).catch((err) => setError(String(err)));
+                        }}
+                        onFilter={(filter) => {
+                          setProofreadFilter(filter);
+                          setCurrentProofreadIndex(0);
+                          persistProofreadReviewState(undefined, filter).catch(() => undefined);
+                        }}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        title={t('cache_editor_proofread_report')}
+                        onClick={() => {
+                          setMobileReportOpen(true);
+                          setMobileNavigatorOpen(false);
+                        }}
+                        className="inline-flex h-11 items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/95 px-3 text-xs font-semibold text-amber-300 shadow-xl"
+                      >
+                        <FileCheck2 size={15} />#{proofreadSummary.status_counts?.pending || 0}
+                      </button>
+                    )}
+                  </div>
+                  <div className="pointer-events-auto">
+                    {mobileNavigatorOpen ? (
+                      <ProofreadQuickNavigator
+                        t={t}
+                        groups={visibleProofreadGroups}
+                        index={currentProofreadIndex}
+                        collapsed={false}
+                        onToggle={() => setMobileNavigatorOpen(false)}
+                        onSelect={(index) => {
+                          setMobileNavigatorOpen(false);
+                          navigateToProofreadGroup(index);
+                        }}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        title={t('cache_editor_proofread_quick_nav', currentProofreadIndex + 1, visibleProofreadGroups.length)}
+                        onClick={() => {
+                          setMobileNavigatorOpen(true);
+                          setMobileReportOpen(false);
+                        }}
+                        className="inline-flex h-11 items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/95 px-3 text-xs font-semibold text-amber-300 shadow-xl"
+                      >
+                        <ListChecks size={15} />{currentProofreadIndex + 1}/{visibleProofreadGroups.length}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+
             {/* Scrollable Rows Container */}
             <div 
               ref={sourceScrollRef}
@@ -1040,14 +1546,28 @@ export const CacheEditor: React.FC = () => {
                   {loading ? t('cache_editor_loading') : t('cache_editor_no_source_loaded')}
                 </div>
               ) : (
-                cacheItems.map((item, index) => (
+                cacheItems.map((item, index) => {
+                  const itemId = `${item.file_path}:${item.text_index}`;
+                  const proofreadGroup = proofreadGroupByItemId.get(itemId);
+                  const activeSuggestion = activeSuggestionForGroup(proofreadGroup);
+                  const suggestionOffset = activeSuggestionIndexForGroup(proofreadGroup);
+                  return (
                   <div 
                     key={item.id}
                     data-row-index={index}
-                    className={`flex border-b border-white/[0.02] transition-colors ${
+                    data-file-path={item.file_path}
+                    data-text-index={item.text_index}
+                    className={`group flex border-b border-white/[0.02] transition-colors ${rowProofreadClass(proofreadGroup)} ${
                       index === currentLine ? 'bg-white/[0.03]' : 'hover:bg-white/[0.01]'
                     }`}
-                    onClick={() => handleRowClick(index)}
+                    onClick={() => {
+                      handleRowClick(index);
+                      if (proofreadGroup) {
+                        setExpandedProofreadItemId((current) => current === itemId ? '' : itemId);
+                        const groupIndex = visibleProofreadGroups.findIndex((group) => group.item_id === itemId);
+                        if (groupIndex >= 0) setCurrentProofreadIndex(groupIndex);
+                      }
+                    }}
                   >
                     {/* Source Pane */}
                     <div className={`flex-1 p-3 border-r border-white/5 ${index === currentLine ? 'opacity-100' : 'opacity-60'}`}>
@@ -1070,7 +1590,13 @@ export const CacheEditor: React.FC = () => {
                     >
                       <div className="flex items-center justify-between text-[10px] text-slate-600 mb-1 group-hover:text-slate-400 transition-colors">
                         <div className="flex items-center gap-2">
-                            <span className="font-mono">#{item.text_index}</span>
+                            {rowProofreadMarker(proofreadGroup) && (
+                              <span className={`text-sm font-black ${rowProofreadMarkerClass(proofreadGroup)}`}>
+                                {rowProofreadMarker(proofreadGroup)}
+                                {proofreadGroup && proofreadGroup.suggestions.length > 1 ? proofreadGroup.suggestions.length : ''}
+                              </span>
+                            )}
+                            <span className="font-mono">{item.text_index}</span>
                             <button
                                 onClick={(e) => {
                                     e.stopPropagation();
@@ -1085,8 +1611,8 @@ export const CacheEditor: React.FC = () => {
                                 {t('cache_editor_single_check_btn')}
                             </button>
                         </div>
-                        {item.modified && (
-                          <span className="text-yellow-500 font-bold uppercase tracking-tighter animate-pulse">{t('cache_editor_modified')}</span>
+                        {item.modified && !rowProofreadMarker(proofreadGroup) && (
+                          <span className="text-emerald-400 text-sm font-black" title={t('cache_editor_modified')}>*</span>
                         )}
                       </div>
 
@@ -1177,18 +1703,36 @@ export const CacheEditor: React.FC = () => {
                           </div>
                         </div>
                       ) : (
-                        <div
-                          className={`cursor-pointer text-sm leading-relaxed min-h-[2.5rem] flex items-start transition-colors ${
-                            index === currentLine ? 'text-white' : 'text-slate-400 hover:text-slate-200'
-                          }`}
-                        >
-                          {item.translation || <em className="text-slate-700 italic">{t('cache_editor_no_translation')}</em>}
-                        </div>
+                        <>
+                          <div
+                            className={`cursor-pointer text-sm leading-relaxed min-h-[2.5rem] flex items-start transition-colors ${
+                              index === currentLine ? 'text-white' : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            {item.translation || <em className="text-slate-700 italic">{t('cache_editor_no_translation')}</em>}
+                          </div>
+                          {proofreadGroup && activeSuggestion && expandedProofreadItemId === itemId && (
+                            <ProofreadInlineSuggestion
+                              t={t}
+                              suggestion={activeSuggestion}
+                              index={suggestionOffset}
+                              count={proofreadGroup.suggestions.length}
+                              busy={proofreadActionBusy}
+                              onPrevious={() => moveInlineSuggestion(proofreadGroup, -1)}
+                              onNext={() => moveInlineSuggestion(proofreadGroup, 1)}
+                              onAccept={() => runProofreadAction(activeSuggestion.suggestion_id, 'accept')}
+                              onReject={() => runProofreadAction(activeSuggestion.suggestion_id, 'reject')}
+                              onIgnore={() => runProofreadAction(activeSuggestion.suggestion_id, 'ignore')}
+                              onRestore={() => runProofreadAction(activeSuggestion.suggestion_id, 'restore')}
+                            />
+                          )}
+                        </>
                       )}
                     </div>
                   </div>
-                )
-              ))}
+                  );
+                })
+              )}
             </div>
           </div>
 
@@ -1215,115 +1759,6 @@ export const CacheEditor: React.FC = () => {
             </div>
           )}
 
-          {/* AI Proofread Docked Panel */}
-          {showProofread && (
-            <div className="bg-surface/80 backdrop-blur-md border-t border-white/10 flex flex-col max-h-[40%] min-h-[150px] animate-in slide-in-from-bottom-2 duration-300">
-              <div className={`p-2 border-b border-white/5 flex items-center justify-between ${elysiaActive ? 'bg-pink-500/10' : 'bg-blue-900/20'}`}>
-                <div className="flex items-center gap-3">
-                  <span className={`text-xs font-bold flex items-center gap-2 ${elysiaActive ? 'text-pink-400' : 'text-blue-400'}`}>
-                    <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${elysiaActive ? 'bg-pink-500' : 'bg-blue-500'}`}></span>
-                    {t('cache_editor_ai_proofread')}
-                  </span>
-                  {proofreadState.running && (
-                    <span className="text-[10px] text-yellow-500 font-mono">
-                      {proofreadState.progress}/{proofreadState.total}
-                    </span>
-                  )}
-                  {proofreadState.tokens_used > 0 && (
-                    <span className="text-[9px] text-gray-500 font-mono">
-                      {t('cache_editor_proofread_tokens_used', proofreadState.tokens_used)}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  {!proofreadState.running ? (
-                    <button
-                      onClick={startProofread}
-                      disabled={!proofreadPath.trim()}
-                      className={`px-2 py-0.5 text-white rounded text-[10px] transition-colors disabled:opacity-50 font-bold ${elysiaActive ? 'bg-pink-500 hover:bg-pink-600' : 'bg-green-600 hover:bg-green-700'}`}
-                    >
-                      {t('cache_editor_start_proofread')}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={stopProofread}
-                      className="px-2 py-0.5 bg-red-600 text-white rounded text-[10px] hover:bg-red-700 transition-colors font-bold"
-                    >
-                      {t('cache_editor_stop_proofread')}
-                    </button>
-                  )}
-                  {proofreadState.issues.length > 0 && (
-                    <button
-                      onClick={acceptAllIssues}
-                      className={`px-2 py-0.5 text-white rounded text-[10px] transition-colors font-bold ${elysiaActive ? 'bg-purple-500 hover:bg-purple-600' : 'bg-blue-600 hover:bg-blue-700'}`}
-                    >
-                      {t('cache_editor_proofread_accept_all')}
-                    </button>
-                  )}
-                  <div className="w-px h-3 bg-white/10 mx-1"></div>
-                  <button
-                    onClick={() => setShowProofread(false)}
-                    className="text-gray-500 hover:text-white transition-colors p-1"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-              
-              <div className="flex-1 overflow-auto custom-scrollbar">
-                {proofreadState.issues.length === 0 ? (
-                  <div className="p-8 text-center text-gray-600 text-xs italic">
-                    {proofreadState.running ? t('cache_editor_proofread_running') : t('cache_editor_proofread_no_issues')}
-                  </div>
-                ) : (
-                  <table className="w-full text-left border-collapse text-[11px]">
-                    <thead className={`${elysiaActive ? 'bg-pink-500/5' : 'bg-white/5'} sticky top-0 z-10 backdrop-blur-sm`}>
-                      <tr>
-                        <th className="p-2 font-bold text-slate-500 border-b border-white/5 w-16 uppercase tracking-tighter">{t('cache_editor_proofread_severity')}</th>
-                        <th className="p-2 font-bold text-slate-500 border-b border-white/5 uppercase tracking-tighter">{t('cache_editor_proofread_original')}</th>
-                        <th className="p-2 font-bold text-slate-500 border-b border-white/5 uppercase tracking-tighter">{t('cache_editor_proofread_corrected')}</th>
-                        <th className="p-2 font-bold text-slate-500 border-b border-white/5 uppercase tracking-tighter">{t('cache_editor_proofread_description')}</th>
-                        <th className="p-2 font-bold text-slate-500 border-b border-white/5 text-right w-36 uppercase tracking-tighter">{t('options_label')}</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5">
-                      {proofreadState.issues.filter(iss => !iss.accepted).map((issue) => (
-                        <tr key={issue.id} className="hover:bg-white/5 transition-colors group">
-                          <td className="p-2">
-                            <span className={`px-1.5 py-0.5 rounded-sm text-[8px] font-bold uppercase ${
-                              issue.severity === 'high' ? 'text-red-400 bg-red-400/10' :
-                              issue.severity === 'medium' ? 'text-yellow-400 bg-yellow-400/10' : 'text-blue-400 bg-blue-400/10'
-                            }`}>
-                              {t(`cache_editor_proofread_${issue.severity}`)}
-                            </span>
-                          </td>
-                          <td className="p-2 text-red-300/40 line-through truncate max-w-[150px] italic">{issue.original_translation}</td>
-                          <td className="p-2 text-green-400 font-bold truncate max-w-[150px]">{issue.corrected_translation}</td>
-                          <td className="p-2 text-slate-500 truncate max-w-[200px]">{issue.description}</td>
-                          <td className="p-2 text-right">
-                            <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button
-                                onClick={() => acceptIssue(issue.id)}
-                                className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-all ${elysiaActive ? 'bg-pink-500/20 text-pink-400 hover:bg-pink-500 hover:text-white' : 'bg-green-600/20 text-green-400 hover:bg-green-600 hover:text-white'}`}
-                              >
-                                {t('cache_editor_proofread_accept')}
-                              </button>
-                              <button
-                                onClick={() => skipIssue(issue.id)}
-                                className="px-1.5 py-0.5 bg-yellow-600/20 text-yellow-400 rounded hover:bg-yellow-600 hover:text-white transition-all text-[9px] font-bold"
-                              >
-                                {t('cache_editor_proofread_keep_original')}
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>

@@ -77,6 +77,8 @@ DEFAULT_CONFIG = {
     "epub_language_update_mode": "auto",
     "polishing_mode_selection": "translated_text_polish",
     "polishing_pre_line_counts": 2,
+    "proofread_report_mode": "archive",
+    "proofread_archive_limit": 20,
     "cache_backup_limit": 10,
     "cache_save_interval": 8,
     "enable_cache_backup": True,

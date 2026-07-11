@@ -350,6 +350,8 @@ export interface AppConfig {
   enable_xlsx_conversion: boolean;
   enable_dry_run: boolean;
   enable_auto_proofread?: boolean;
+  proofread_report_mode?: 'archive' | 'overwrite';
+  proofread_archive_limit?: number;
   temp_file_limit?: number;
   cache_editor_page_size?: number;
   unlocked_themes?: string[]; // Persist unlocked themes
