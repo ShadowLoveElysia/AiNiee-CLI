@@ -129,7 +129,7 @@ const loadProofreadState = (): ProofreadState | null => {
 
 export const CacheEditor: React.FC = () => {
   const { t } = useI18n();
-  const { activeTheme } = useGlobal();
+  const { activeTheme, config } = useGlobal();
   const elysiaActive = activeTheme === 'elysia' || activeTheme === 'herrscher_of_human';
 
   const getThemeColorClass = () => {
@@ -199,10 +199,22 @@ export const CacheEditor: React.FC = () => {
   const [expandedProofreadItemId, setExpandedProofreadItemId] = useState('');
   const [proofreadSuggestionOffsets, setProofreadSuggestionOffsets] = useState<Record<string, number>>({});
   const [proofreadActionBusy, setProofreadActionBusy] = useState(false);
-  const [reportPanelCollapsed, setReportPanelCollapsed] = useState(false);
-  const [quickNavigatorCollapsed, setQuickNavigatorCollapsed] = useState(false);
-  const [mobileReportOpen, setMobileReportOpen] = useState(false);
-  const [mobileNavigatorOpen, setMobileNavigatorOpen] = useState(false);
+  const [proofreadSuggestionMode, setProofreadSuggestionMode] = useState<'proofread' | 'annotation'>(
+    () => savedState?.proofreadSuggestionMode === 'annotation' ? 'annotation' : 'proofread'
+  );
+  const [reportPanelCollapsed, setReportPanelCollapsed] = useState(
+    () => typeof window !== 'undefined' && !window.matchMedia('(min-width: 1800px)').matches
+  );
+  const [quickNavigatorCollapsed, setQuickNavigatorCollapsed] = useState(
+    () => typeof window !== 'undefined' && !window.matchMedia('(min-width: 1800px)').matches
+  );
+  const [mobileProofreadPanel, setMobileProofreadPanel] = useState<'report' | 'navigator' | null>(null);
+
+  useEffect(() => {
+    if (!savedState?.proofreadSuggestionMode && config?.proofread_suggestion_mode) {
+      setProofreadSuggestionMode(config.proofread_suggestion_mode);
+    }
+  }, [config?.proofread_suggestion_mode, savedState?.proofreadSuggestionMode]);
 
   // Single line AI Analysis state
   const [analyzingLine, setAnalyzingLine] = useState(false);
@@ -227,11 +239,12 @@ export const CacheEditor: React.FC = () => {
       grouped.set(suggestion.item_id, items);
     });
     const statusPriority: Record<ProofreadSuggestionStatus, number> = {
-      conflict: 6,
-      pending: 5,
-      accepted: 4,
-      ignored: 3,
-      rejected: 2,
+      conflict: 7,
+      pending: 6,
+      accepted: 5,
+      ignored: 4,
+      rejected: 3,
+      completed: 2,
       stale: 1,
     };
     return Array.from(grouped.entries()).map(([itemId, items]) => {
@@ -244,7 +257,9 @@ export const CacheEditor: React.FC = () => {
         text_index: items[0].text_index,
         suggestions: items,
         displayStatus,
-        highestSeverity: items.some((item) => item.severity === 'high') ? 'high' : 'medium',
+        highestSeverity: items.some((item) => item.severity === 'high')
+          ? 'high'
+          : items.some((item) => item.severity === 'medium') ? 'medium' : 'info',
       };
     });
   };
@@ -471,10 +486,11 @@ export const CacheEditor: React.FC = () => {
       pageSize,
       projectPath,
       searchQuery,
-      currentLine
+      currentLine,
+      proofreadSuggestionMode,
     };
     saveStateToStorage(stateToSave);
-  }, [currentPage, pageSize, projectPath, searchQuery, currentLine]);
+  }, [currentPage, pageSize, projectPath, searchQuery, currentLine, proofreadSuggestionMode]);
 
   // Save proofread state to localStorage
   useEffect(() => {
@@ -811,13 +827,16 @@ export const CacheEditor: React.FC = () => {
         body: JSON.stringify({
           item_id: itemId,
           translation: newTranslation,
-          project_path: projectPath
+          project_path: projectPath,
+          report_file: reportQueryFile() || null,
         })
       });
 
       if (!response.ok) {
         throw new Error(t('cache_editor_failed_update_item'));
       }
+
+      const data = await response.json();
 
       // Update local state
       setCacheItems(items =>
@@ -828,7 +847,9 @@ export const CacheEditor: React.FC = () => {
         )
       );
 
-      if (activeProofreadReport) {
+      if (data.report) {
+        applyProofreadReport(data.report as ProofreadReportPayload);
+      } else if (activeProofreadReport) {
         await loadProofreadReport(activeProofreadReport, projectPath);
       }
 
@@ -920,7 +941,10 @@ export const CacheEditor: React.FC = () => {
       let response = await fetch('/api/proofread/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_path: proofreadPath })
+        body: JSON.stringify({
+          project_path: proofreadPath,
+          suggestion_mode: proofreadSuggestionMode,
+        })
       });
       if (response.status === 409) {
         const conflict = await response.json();
@@ -941,6 +965,7 @@ export const CacheEditor: React.FC = () => {
             body: JSON.stringify({
               project_path: proofreadPath,
               report_mode: 'overwrite',
+              suggestion_mode: proofreadSuggestionMode,
               overwrite_confirmed: true,
             }),
           });
@@ -970,18 +995,24 @@ export const CacheEditor: React.FC = () => {
 
   // Shared function to scroll a container to align a specific row
   const scrollToRow = (containerRef: React.RefObject<HTMLDivElement>, rowIndex: number) => {
-    if (containerRef.current) {
-      const rowElements = containerRef.current.querySelectorAll('[data-row-index]');
+    const container = containerRef.current;
+    if (container) {
+      const rowElements = container.querySelectorAll('[data-row-index]');
       const targetRow = rowElements[rowIndex] as HTMLElement;
 
       if (targetRow) {
-        const containerHeight = containerRef.current.clientHeight;
-        const rowTop = targetRow.offsetTop;
-        const rowHeight = targetRow.offsetHeight;
+        if (rowIndex <= 0) {
+          container.scrollTop = 0;
+          return;
+        }
+
+        const containerRect = container.getBoundingClientRect();
+        const rowRect = targetRow.getBoundingClientRect();
+        const rowTop = rowRect.top - containerRect.top + container.scrollTop;
 
         // Center the target row in the viewport
-        const scrollTop = rowTop - (containerHeight / 2) + (rowHeight / 2);
-        containerRef.current.scrollTop = Math.max(0, scrollTop);
+        const scrollTop = rowTop - (container.clientHeight / 2) + (rowRect.height / 2);
+        container.scrollTop = Math.max(0, scrollTop);
       }
     }
   };
@@ -1097,6 +1128,7 @@ export const CacheEditor: React.FC = () => {
 
   const rowProofreadMarker = (group?: ProofreadLineGroup) => {
     if (!group) return '';
+    if (group.displayStatus === 'completed') return '';
     if (group.displayStatus === 'pending') return '#';
     if (group.displayStatus === 'conflict') return '!';
     if (group.displayStatus === 'accepted') return '*';
@@ -1152,16 +1184,16 @@ export const CacheEditor: React.FC = () => {
   };
 
   return (
-    <div className="h-full flex flex-col cache-editor-container bg-transparent overflow-hidden">
+    <div className="grid h-full min-h-0 grid-cols-1 grid-rows-[auto_auto_minmax(0,1fr)] gap-x-4 overflow-hidden bg-transparent cache-editor-container min-[1800px]:grid-cols-[280px_minmax(720px,1fr)_320px]">
       {/* Top Header Bar - Always visible */}
-      <div className="flex items-center justify-between p-4 bg-surface/50 border-b border-white/5 backdrop-blur-md">
+      <div className="col-start-1 row-start-1 flex items-center justify-between border-b border-white/5 bg-surface/50 p-4 backdrop-blur-md min-[1800px]:col-start-2">
         <h1 className={`text-xl font-black tracking-tighter uppercase ${elysiaActive ? 'text-pink-500' : ''}`}>
           {t('cache_editor_title')}
         </h1>
       </div>
 
       {/* Project Control Panel - Always visible */}
-      <div className="p-4 bg-surface/30 border-b border-white/5 space-y-3 backdrop-blur-sm">
+      <div className="col-start-1 row-start-2 space-y-3 border-b border-white/5 bg-surface/30 p-4 backdrop-blur-sm min-[1800px]:col-start-2">
         {/* AI Model Capability Warning */}
         <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
             <AlertTriangle className="text-yellow-500 shrink-0" size={20} />
@@ -1171,8 +1203,8 @@ export const CacheEditor: React.FC = () => {
         </div>
 
         {/* Load Cache Row */}
-        <div className="flex gap-4 items-center">
-          <div className="flex-1">
+        <div className="grid grid-cols-2 gap-3 sm:flex sm:items-center sm:gap-4">
+          <div className="col-span-2 w-full flex-1">
             <div className="relative group">
               <span className={`absolute left-3 top-1/2 -translate-y-1/2 text-[9px] font-black uppercase tracking-wider transition-colors ${getLabelColor()}`}>CACHE</span>
               <input
@@ -1191,7 +1223,7 @@ export const CacheEditor: React.FC = () => {
           <button
             onClick={loadCacheFromPath}
             disabled={loading || !projectPath.trim()}
-            className={`px-4 py-2 rounded-lg text-slate-900 font-bold transition-all flex items-center gap-2 min-w-[120px] justify-center text-sm shadow-lg ${
+            className={`flex min-h-11 w-full min-w-[120px] items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-bold text-slate-900 shadow-lg transition-all sm:w-auto ${
                 elysiaActive ? 'bg-pink-500 hover:bg-pink-600 shadow-pink-500/20' : 'bg-primary hover:bg-cyan-400 shadow-primary/20'
             } disabled:opacity-50`}
           >
@@ -1203,7 +1235,7 @@ export const CacheEditor: React.FC = () => {
           <button
             onClick={() => showBackups ? setShowBackups(false) : loadCacheBackups()}
             disabled={backupLoading || !projectPath.trim()}
-            className="px-4 py-2 bg-white/5 text-slate-300 rounded-lg hover:bg-white/10 transition-colors text-sm border border-white/10 flex items-center gap-2 min-h-11 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
             title={t('cache_editor_backups')}
             aria-expanded={showBackups}
           >
@@ -1229,7 +1261,7 @@ export const CacheEditor: React.FC = () => {
                 localStorage.removeItem(CACHE_EDITOR_STATE_KEY);
                 setSavedState(null);
               }}
-              className="px-4 py-2 bg-white/5 text-slate-400 rounded-lg hover:bg-white/10 transition-colors text-sm border border-white/5"
+              className="col-span-2 min-h-11 w-full rounded-lg border border-white/5 bg-white/5 px-4 py-2 text-sm text-slate-400 transition-colors hover:bg-white/10 sm:w-auto"
             >
               {t('cache_editor_switch_project')}
             </button>
@@ -1325,8 +1357,8 @@ export const CacheEditor: React.FC = () => {
         )}
 
         {/* AI Proofread Row */}
-        <div className="flex gap-4 items-center">
-          <div className="flex-1">
+        <div className="grid grid-cols-2 gap-3 sm:flex sm:items-center sm:gap-4">
+          <div className="col-span-2 w-full flex-1">
             <div className="relative group">
               <span className={`absolute left-3 top-1/2 -translate-y-1/2 text-[9px] font-black uppercase tracking-tight transition-colors ${elysiaActive ? 'text-pink-400' : 'text-yellow-600'}`}>PROOFREAD</span>
               <input
@@ -1338,10 +1370,27 @@ export const CacheEditor: React.FC = () => {
               />
             </div>
           </div>
+          <div className="grid w-full shrink-0 grid-cols-2 gap-1 rounded-lg border border-white/10 bg-slate-950/50 p-1 sm:w-auto">
+            {(['proofread', 'annotation'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setProofreadSuggestionMode(mode)}
+                disabled={proofreadState.running}
+                className={`min-h-9 rounded-md px-3 text-[11px] font-semibold transition-colors ${
+                  proofreadSuggestionMode === mode
+                    ? 'bg-yellow-500 text-slate-950'
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                } disabled:opacity-50`}
+              >
+                {t(`setting_proofread_suggestion_mode_${mode}`)}
+              </button>
+            ))}
+          </div>
           <button
             onClick={startProofread}
             disabled={proofreadState.running || !proofreadPath.trim()}
-            className={`px-4 py-2 rounded-lg text-white font-bold transition-all flex items-center gap-2 min-w-[120px] justify-center text-sm shadow-lg ${
+            className={`flex min-h-11 w-full min-w-[120px] items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-bold text-white shadow-lg transition-all sm:w-auto ${
                 elysiaActive ? 'bg-purple-500 hover:bg-purple-600 shadow-purple-500/20' : 'bg-yellow-600 hover:bg-yellow-700 shadow-yellow-600/20'
             } disabled:opacity-50`}
           >
@@ -1353,7 +1402,7 @@ export const CacheEditor: React.FC = () => {
           {proofreadState.running && (
             <button
               onClick={stopProofread}
-              className="px-4 py-2 rounded-lg border border-rose-400/25 bg-rose-400/10 text-rose-300 text-sm font-bold"
+              className="min-h-11 w-full rounded-lg border border-rose-400/25 bg-rose-400/10 px-4 py-2 text-sm font-bold text-rose-300 sm:w-auto"
             >
               {t('cache_editor_stop_proofread')} {proofreadState.progress}/{proofreadState.total}
             </button>
@@ -1368,12 +1417,45 @@ export const CacheEditor: React.FC = () => {
         )}
       </div>
 
+      {cacheStatus.loaded && proofreadReports.length > 0 && (
+        <aside
+          data-proofread-layout="report-sidebar"
+          className="hidden min-h-0 pt-4 min-[1800px]:col-start-1 min-[1800px]:row-start-3 min-[1800px]:block"
+        >
+          <div className="flex justify-end">
+            <ProofreadReportPanel
+              t={t}
+              options={proofreadReports}
+              activeFile={activeProofreadReport}
+              run={proofreadRun}
+              summary={proofreadSummary}
+              filter={proofreadFilter}
+              collapsed={reportPanelCollapsed}
+              onToggle={() => setReportPanelCollapsed((value) => !value)}
+              onUndo={undoProofreadAction}
+              onSelectReport={(file) => {
+                setActiveProofreadReport(file);
+                loadProofreadReport(file).catch((err) => setError(String(err)));
+              }}
+              onFilter={(filter) => {
+                setProofreadFilter(filter);
+                setCurrentProofreadIndex(0);
+                persistProofreadReviewState(undefined, filter).catch(() => undefined);
+              }}
+            />
+          </div>
+        </aside>
+      )}
+
       {/* Cache Editor Content - Only show when loaded */}
       {cacheStatus.loaded && (
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div
+          data-proofread-layout="editor"
+          className="col-start-1 row-start-3 flex min-h-0 flex-col overflow-hidden min-[1800px]:col-start-2"
+        >
           {/* Top navigation bar */}
-          <div className="flex items-center justify-between p-4 bg-surface/30 border-b border-white/5 backdrop-blur-sm">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-col gap-3 border-b border-white/5 bg-surface/30 p-4 backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between">
+            <div className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:w-auto sm:gap-4">
               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                 {t('cache_editor_line_info',
                   currentLine + 1 + (currentPage - 1) * pageSize,
@@ -1389,7 +1471,7 @@ export const CacheEditor: React.FC = () => {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder={t('cache_editor_search_placeholder')}
-                className="px-3 py-1 bg-slate-950/50 border border-white/10 rounded-lg text-xs focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all text-white w-48"
+                className="w-full rounded-lg border border-white/10 bg-slate-950/50 px-3 py-1 text-xs text-white outline-none transition-all focus:border-primary focus:ring-1 focus:ring-primary sm:w-48"
               />
               <button
                 onClick={() => {
@@ -1407,15 +1489,113 @@ export const CacheEditor: React.FC = () => {
                   localStorage.removeItem(CACHE_EDITOR_STATE_KEY);
                   setSavedState(null);
                 }}
-                className="px-3 py-1 bg-white/5 text-slate-400 rounded-lg text-[10px] font-bold uppercase hover:bg-white/10 transition-colors border border-white/5"
+                className="whitespace-nowrap rounded-lg border border-white/5 bg-white/5 px-3 py-1 text-[10px] font-bold uppercase text-slate-400 transition-colors hover:bg-white/10"
               >
                 {t('cache_editor_switch_project')}
               </button>
             </div>
           </div>
 
+          {proofreadReports.length > 0 && (
+            <div
+              data-proofread-layout="flow-tools"
+              className="flex-none border-b border-white/5 bg-surface/20 p-3 min-[1800px]:hidden"
+            >
+              <div className="grid grid-cols-2 gap-2 sm:hidden">
+                <button
+                  type="button"
+                  onClick={() => setMobileProofreadPanel((current) => current === 'report' ? null : 'report')}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-950/90 px-3 text-xs font-semibold text-amber-300"
+                >
+                  <FileCheck2 size={15} />
+                  {t('cache_editor_proofread_report')} #{proofreadSummary.status_counts?.pending || 0}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobileProofreadPanel((current) => current === 'navigator' ? null : 'navigator')}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-950/90 px-3 text-xs font-semibold text-amber-300"
+                >
+                  <ListChecks size={15} />
+                  {t('cache_editor_proofread_quick_nav', visibleProofreadGroups.length > 0 ? currentProofreadIndex + 1 : 0, visibleProofreadGroups.length)}
+                </button>
+              </div>
+              {mobileProofreadPanel && (
+                <div className="mt-2 flex min-w-0 justify-center sm:hidden">
+                  {mobileProofreadPanel === 'report' ? (
+                    <ProofreadReportPanel
+                      t={t}
+                      options={proofreadReports}
+                      activeFile={activeProofreadReport}
+                      run={proofreadRun}
+                      summary={proofreadSummary}
+                      filter={proofreadFilter}
+                      collapsed={false}
+                      onToggle={() => setMobileProofreadPanel(null)}
+                      onUndo={undoProofreadAction}
+                      onSelectReport={(file) => {
+                        setActiveProofreadReport(file);
+                        loadProofreadReport(file).catch((err) => setError(String(err)));
+                      }}
+                      onFilter={(filter) => {
+                        setProofreadFilter(filter);
+                        setCurrentProofreadIndex(0);
+                        persistProofreadReviewState(undefined, filter).catch(() => undefined);
+                      }}
+                    />
+                  ) : (
+                    <ProofreadQuickNavigator
+                      t={t}
+                      groups={visibleProofreadGroups}
+                      index={currentProofreadIndex}
+                      collapsed={false}
+                      onToggle={() => setMobileProofreadPanel(null)}
+                      onSelect={(index) => {
+                        setMobileProofreadPanel(null);
+                        navigateToProofreadGroup(index);
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+              <div className="hidden grid-cols-2 gap-3 sm:grid">
+                <div className="flex min-w-0 items-start justify-start">
+                <ProofreadReportPanel
+                  t={t}
+                  options={proofreadReports}
+                  activeFile={activeProofreadReport}
+                  run={proofreadRun}
+                  summary={proofreadSummary}
+                  filter={proofreadFilter}
+                  collapsed={reportPanelCollapsed}
+                  onToggle={() => setReportPanelCollapsed((value) => !value)}
+                  onUndo={undoProofreadAction}
+                  onSelectReport={(file) => {
+                    setActiveProofreadReport(file);
+                    loadProofreadReport(file).catch((err) => setError(String(err)));
+                  }}
+                  onFilter={(filter) => {
+                    setProofreadFilter(filter);
+                    setCurrentProofreadIndex(0);
+                    persistProofreadReviewState(undefined, filter).catch(() => undefined);
+                  }}
+                />
+                </div>
+                <div className="flex min-w-0 items-start justify-end">
+                <ProofreadQuickNavigator
+                  t={t}
+                  groups={visibleProofreadGroups}
+                  index={currentProofreadIndex}
+                  collapsed={quickNavigatorCollapsed}
+                  onToggle={() => setQuickNavigatorCollapsed((value) => !value)}
+                  onSelect={navigateToProofreadGroup}
+                />
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Main unified editor area */}
-          <div className="flex-1 flex flex-col overflow-hidden relative">
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
             {/* Header for the panes */}
             <div className="flex bg-surface/50 border-b border-white/5 backdrop-blur-sm sticky top-0 z-20">
               <div className="flex-1 px-4 py-2 border-r border-white/5">
@@ -1433,108 +1613,6 @@ export const CacheEditor: React.FC = () => {
                 </h3>
               </div>
             </div>
-
-            {proofreadReports.length > 0 && (
-              <>
-                <div className="pointer-events-none absolute left-4 top-12 z-30 hidden xl:block">
-                  <ProofreadReportPanel
-                    t={t}
-                    options={proofreadReports}
-                    activeFile={activeProofreadReport}
-                    run={proofreadRun}
-                    summary={proofreadSummary}
-                    filter={proofreadFilter}
-                    collapsed={reportPanelCollapsed}
-                    onToggle={() => setReportPanelCollapsed((value) => !value)}
-                    onUndo={undoProofreadAction}
-                    onSelectReport={(file) => {
-                      setActiveProofreadReport(file);
-                      loadProofreadReport(file).catch((err) => setError(String(err)));
-                    }}
-                    onFilter={(filter) => {
-                      setProofreadFilter(filter);
-                      setCurrentProofreadIndex(0);
-                      persistProofreadReviewState(undefined, filter).catch(() => undefined);
-                    }}
-                  />
-                </div>
-                <div className="pointer-events-none absolute right-4 top-1/2 z-30 hidden -translate-y-1/2 xl:block">
-                  <ProofreadQuickNavigator
-                    t={t}
-                    groups={visibleProofreadGroups}
-                    index={currentProofreadIndex}
-                    collapsed={quickNavigatorCollapsed}
-                    onToggle={() => setQuickNavigatorCollapsed((value) => !value)}
-                    onSelect={navigateToProofreadGroup}
-                  />
-                </div>
-                <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30 flex items-end justify-between gap-3 xl:hidden">
-                  <div className="pointer-events-auto">
-                    {mobileReportOpen ? (
-                      <ProofreadReportPanel
-                        t={t}
-                        options={proofreadReports}
-                        activeFile={activeProofreadReport}
-                        run={proofreadRun}
-                        summary={proofreadSummary}
-                        filter={proofreadFilter}
-                        collapsed={false}
-                        onToggle={() => setMobileReportOpen(false)}
-                        onUndo={undoProofreadAction}
-                        onSelectReport={(file) => {
-                          setActiveProofreadReport(file);
-                          loadProofreadReport(file).catch((err) => setError(String(err)));
-                        }}
-                        onFilter={(filter) => {
-                          setProofreadFilter(filter);
-                          setCurrentProofreadIndex(0);
-                          persistProofreadReviewState(undefined, filter).catch(() => undefined);
-                        }}
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        title={t('cache_editor_proofread_report')}
-                        onClick={() => {
-                          setMobileReportOpen(true);
-                          setMobileNavigatorOpen(false);
-                        }}
-                        className="inline-flex h-11 items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/95 px-3 text-xs font-semibold text-amber-300 shadow-xl"
-                      >
-                        <FileCheck2 size={15} />#{proofreadSummary.status_counts?.pending || 0}
-                      </button>
-                    )}
-                  </div>
-                  <div className="pointer-events-auto">
-                    {mobileNavigatorOpen ? (
-                      <ProofreadQuickNavigator
-                        t={t}
-                        groups={visibleProofreadGroups}
-                        index={currentProofreadIndex}
-                        collapsed={false}
-                        onToggle={() => setMobileNavigatorOpen(false)}
-                        onSelect={(index) => {
-                          setMobileNavigatorOpen(false);
-                          navigateToProofreadGroup(index);
-                        }}
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        title={t('cache_editor_proofread_quick_nav', currentProofreadIndex + 1, visibleProofreadGroups.length)}
-                        onClick={() => {
-                          setMobileNavigatorOpen(true);
-                          setMobileReportOpen(false);
-                        }}
-                        className="inline-flex h-11 items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/95 px-3 text-xs font-semibold text-amber-300 shadow-xl"
-                      >
-                        <ListChecks size={15} />{currentProofreadIndex + 1}/{visibleProofreadGroups.length}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </>
-            )}
 
             {/* Scrollable Rows Container */}
             <div 
@@ -1760,6 +1838,22 @@ export const CacheEditor: React.FC = () => {
           )}
 
         </div>
+      )}
+
+      {cacheStatus.loaded && proofreadReports.length > 0 && (
+        <aside
+          data-proofread-layout="navigator-sidebar"
+          className="hidden min-h-0 items-center min-[1800px]:col-start-3 min-[1800px]:row-start-3 min-[1800px]:flex"
+        >
+          <ProofreadQuickNavigator
+            t={t}
+            groups={visibleProofreadGroups}
+            index={currentProofreadIndex}
+            collapsed={quickNavigatorCollapsed}
+            onToggle={() => setQuickNavigatorCollapsed((value) => !value)}
+            onSelect={navigateToProofreadGroup}
+          />
+        </aside>
       )}
     </div>
   );

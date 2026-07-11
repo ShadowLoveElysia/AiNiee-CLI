@@ -186,6 +186,7 @@ class AIProofreadMenu:
             ProofreadSuggestionStore,
             build_proofread_batch,
             collect_suggestion_items,
+            normalize_suggestion_mode,
         )
         from ModuleFolders.Service.Proofreader.ProofreadSuggestionTask import ProofreadSuggestionTask
         from ModuleFolders.UserInterface.Proofreader import ProofreadSuggestionTUI
@@ -222,6 +223,9 @@ class AIProofreadMenu:
             for batch_index in range((len(items) + batch_size - 1) // batch_size)
         ]
         glossary = self.config.get("prompt_dictionary_data", []) or []
+        suggestion_mode = normalize_suggestion_mode(
+            self.config.get("proofread_suggestion_mode", "proofread")
+        )
         store = ProofreadSuggestionStore(project_path)
         try:
             archive_limit = max(0, int(self.config.get("proofread_archive_limit", 20)))
@@ -232,6 +236,7 @@ class AIProofreadMenu:
             provider=str(self.config.get("platform", "") or ""),
             model=str(self.config.get("model", "") or ""),
             archive_limit=archive_limit,
+            suggestion_mode=suggestion_mode,
         )
         if archive_path is not None:
             console.print(f"[cyan]{self._tr('proofread_suggestion_archived').format(archive_path)}[/cyan]")
@@ -285,6 +290,7 @@ class AIProofreadMenu:
                 batch,
                 glossary=glossary,
                 context_lines=build_context_for_batch(index),
+                suggestion_mode=suggestion_mode,
             )
             task.prepare()
             tasks_list.append(task)
@@ -1007,6 +1013,9 @@ class AIProofreadMenu:
             threshold = self.config.get("proofread_confidence_threshold", 0.7)
             report_mode = str(self.config.get("proofread_report_mode", "archive") or "archive")
             archive_limit = self.config.get("proofread_archive_limit", 20)
+            suggestion_mode = str(
+                self.config.get("proofread_suggestion_mode", "proofread") or "proofread"
+            )
 
             table = Table(show_header=False, box=None)
             table.add_row("[cyan]1.[/]", f"{self._tr('setting_proofread_context_lines')}: {context_lines}")
@@ -1017,12 +1026,17 @@ class AIProofreadMenu:
                 f"{self._tr('setting_proofread_report_mode')}: {self._tr(f'setting_proofread_report_mode_{report_mode}')}",
             )
             table.add_row("[cyan]5.[/]", f"{self._tr('setting_proofread_archive_limit')}: {archive_limit}")
+            table.add_row(
+                "[cyan]6.[/]",
+                f"{self._tr('setting_proofread_suggestion_mode')}: "
+                f"{self._tr(f'setting_proofread_suggestion_mode_{suggestion_mode}')}",
+            )
             console.print(table)
             console.print(f"\n[dim]0. {self._tr('menu_back')}[/dim]")
 
             choice = IntPrompt.ask(
                 self._tr("prompt_select"),
-                choices=["0", "1", "2", "3", "4", "5"],
+                choices=["0", "1", "2", "3", "4", "5", "6"],
                 show_choices=False,
             )
 
@@ -1050,5 +1064,11 @@ class AIProofreadMenu:
                     default=archive_limit,
                 )
                 self.config["proofread_archive_limit"] = min(max(new_val, 0), 999)
+            elif choice == 6:
+                self.config["proofread_suggestion_mode"] = Prompt.ask(
+                    self._tr("setting_proofread_suggestion_mode"),
+                    choices=["proofread", "annotation"],
+                    default=suggestion_mode,
+                )
 
             self.host.save_config()

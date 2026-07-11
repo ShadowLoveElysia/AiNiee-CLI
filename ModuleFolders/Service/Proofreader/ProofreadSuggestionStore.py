@@ -12,12 +12,14 @@ import uuid
 from pathlib import Path
 from typing import Iterable
 
+from ModuleFolders.Infrastructure.Cache.CacheItem import TranslationStatus
 from ModuleFolders.Service.Proofreader.ProofreadSuggestion import (
     ProofreadSuggestion,
     ProofreadSuggestionParseResult,
     ProofreadSuggestionStatus,
     find_cache_item,
     line_hash,
+    normalize_suggestion_mode,
     translation_for_item,
 )
 
@@ -92,10 +94,16 @@ class ProofreadSuggestionStore:
         sequence: int = 1,
         provider: str = "",
         model: str = "",
+        suggestion_mode: str = "proofread",
     ) -> None:
         self.suggestions = []
         self.closed_batches = []
-        self.run = self._default_run(sequence=sequence, provider=provider, model=model)
+        self.run = self._default_run(
+            sequence=sequence,
+            provider=provider,
+            model=model,
+            suggestion_mode=normalize_suggestion_mode(suggestion_mode),
+        )
         self.project = {}
         self.review_state = self._default_review_state()
         self.review_history = []
@@ -140,6 +148,7 @@ class ProofreadSuggestionStore:
         provider: str = "",
         model: str = "",
         archive_limit: int = 20,
+        suggestion_mode: str = "proofread",
     ) -> Path | None:
         normalized_mode = str(mode or "archive").strip().lower()
         if normalized_mode not in {"archive", "overwrite"}:
@@ -152,7 +161,12 @@ class ProofreadSuggestionStore:
         if normalized_mode == "archive" and self.has_report_content():
             archive_path = self.archive_current()
 
-        self.reset(sequence=sequence, provider=provider, model=model)
+        self.reset(
+            sequence=sequence,
+            provider=provider,
+            model=model,
+            suggestion_mode=suggestion_mode,
+        )
         self.storage_path = self.path
         self.is_archive = False
         self.save()
@@ -308,6 +322,7 @@ class ProofreadSuggestionStore:
         ]
 
     def refresh_conflicts(self, project) -> int:
+        completed = self.complete_manually_edited_lines(project, client="sync", save=False)
         marked = 0
         for suggestion in self.pending():
             cache_item = find_cache_item(project, suggestion.file_path, suggestion.text_index)
@@ -321,9 +336,135 @@ class ProofreadSuggestionStore:
             if current_hash != suggestion.line_hash:
                 suggestion.status = ProofreadSuggestionStatus.CONFLICT
                 marked += 1
-        if marked:
+        if completed or marked:
             self.save()
         return marked
+
+    def complete_manually_edited_lines(
+        self,
+        project,
+        *,
+        file_path: str | None = None,
+        text_index: int | None = None,
+        client: str = "web",
+        save: bool = True,
+    ) -> int:
+        grouped: dict[str, list[ProofreadSuggestion]] = {}
+        for suggestion in self.suggestions:
+            if file_path is not None and suggestion.file_path != file_path:
+                continue
+            if text_index is not None and int(suggestion.text_index) != int(text_index):
+                continue
+            grouped.setdefault(suggestion.item_id, []).append(suggestion)
+
+        completed = 0
+        completed_ids: set[str] = set()
+        timestamp = self._now()
+        for suggestions in grouped.values():
+            item_id = suggestions[0].item_id
+            has_current_decision = any(
+                suggestion.status in {
+                    ProofreadSuggestionStatus.REJECTED,
+                    ProofreadSuggestionStatus.IGNORED,
+                }
+                for suggestion in suggestions
+            )
+            has_historical_decision = any(
+                entry.get("item_id") == item_id
+                and entry.get("action") in {"rejected", "ignored"}
+                and not entry.get("undone", False)
+                and not entry.get("superseded", False)
+                for entry in self.review_history
+            )
+            if not has_current_decision and not has_historical_decision:
+                continue
+
+            first = suggestions[0]
+            cache_item = find_cache_item(project, first.file_path, first.text_index)
+            if cache_item is None or cache_item.translation_status != TranslationStatus.USER_PROOFREAD:
+                continue
+
+            extra = cache_item.extra if isinstance(cache_item.extra, dict) else {}
+            has_manual_marker = bool(extra.get("proofread_manual_edit"))
+            if extra.get("proofread_suggestion") and not has_manual_marker:
+                continue
+
+            line_changed = any(
+                line_hash(
+                    cache_item.source_text,
+                    translation_for_item(cache_item, suggestion.target_field),
+                    suggestion.target_field,
+                )
+                != suggestion.line_hash
+                for suggestion in suggestions
+            )
+            if not line_changed:
+                continue
+
+            for suggestion in suggestions:
+                if suggestion.status in {
+                    ProofreadSuggestionStatus.ACCEPTED,
+                    ProofreadSuggestionStatus.COMPLETED,
+                }:
+                    continue
+                previous_status = str(suggestion.status)
+                current_hash = line_hash(
+                    cache_item.source_text,
+                    translation_for_item(cache_item, suggestion.target_field),
+                    suggestion.target_field,
+                )
+                suggestion.status = ProofreadSuggestionStatus.COMPLETED
+                suggestion.status_updated_at = timestamp
+                suggestion.status_updated_by = client
+                suggestion.last_action = "completed"
+                suggestion.undo_available = False
+                suggestion.extra["completion_reason"] = "manual_edit"
+                self.review_history.append(
+                    {
+                        "operation_id": f"op_{uuid.uuid4().hex}",
+                        "suggestion_id": suggestion.suggestion_id,
+                        "item_id": suggestion.item_id,
+                        "action": "completed",
+                        "previous_status": previous_status,
+                        "next_status": str(ProofreadSuggestionStatus.COMPLETED),
+                        "target_field": suggestion.target_field,
+                        "original_translation": suggestion.original_translation,
+                        "applied_translation": "",
+                        "line_hash_before": suggestion.line_hash,
+                        "line_hash_after": current_hash,
+                        "related_statuses": {},
+                        "related_operation_id": "",
+                        "cache_snapshot": {},
+                        "completion_reason": "manual_edit",
+                        "timestamp": timestamp,
+                        "client": client,
+                        "undone": False,
+                    }
+                )
+                completed_ids.add(suggestion.suggestion_id)
+                completed += 1
+
+        if not completed:
+            return 0
+
+        for entry in self.review_history:
+            if (
+                entry.get("suggestion_id") in completed_ids
+                and entry.get("action") != "completed"
+                and not entry.get("undone", False)
+            ):
+                entry["superseded"] = True
+                entry["superseded_at"] = timestamp
+                entry["superseded_by"] = client
+                entry["superseded_reason"] = "manual_edit"
+
+        if self.review_state.get("current_suggestion_id") in completed_ids:
+            self.review_state["current_suggestion_id"] = ""
+        self.review_state["updated_at"] = timestamp
+        self.review_state["updated_by"] = client
+        if save:
+            self.save()
+        return completed
 
     def mark_many(self, suggestions: Iterable[ProofreadSuggestion], status: ProofreadSuggestionStatus) -> None:
         ids = {suggestion.suggestion_id for suggestion in suggestions}
@@ -436,6 +577,7 @@ class ProofreadSuggestionStore:
         sequence: int = 1,
         provider: str = "",
         model: str = "",
+        suggestion_mode: str = "proofread",
     ) -> dict:
         return {
             "run_id": f"proofread_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}",
@@ -445,6 +587,7 @@ class ProofreadSuggestionStore:
             "generation_status": "running",
             "provider": provider,
             "model": model,
+            "suggestion_mode": normalize_suggestion_mode(suggestion_mode),
             "source_cache_hash": "",
         }
 

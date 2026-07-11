@@ -27,6 +27,7 @@ class ProofreadSuggestionTask(Base):
         batch: ProofreadBatch,
         glossary: list[dict] | None = None,
         context_lines: list[dict] | None = None,
+        suggestion_mode: str = "proofread",
     ) -> None:
         super().__init__()
         self.config = config
@@ -34,12 +35,18 @@ class ProofreadSuggestionTask(Base):
         self.batch = batch
         self.glossary = glossary or []
         self.context_lines = context_lines or []
+        self.suggestion_mode = suggestion_mode
         self.system_prompt = ""
         self.messages: list[dict[str, str]] = []
         self.task_id = batch.batch_id
 
     def prepare(self) -> None:
-        prompt = build_suggestion_prompt(self.batch, self.glossary, self.context_lines)
+        prompt = build_suggestion_prompt(
+            self.batch,
+            self.glossary,
+            self.context_lines,
+            suggestion_mode=self.suggestion_mode,
+        )
         self.messages = [{"role": "user", "content": prompt}]
 
     def run(self) -> dict:
@@ -68,7 +75,11 @@ class ProofreadSuggestionTask(Base):
             if skip:
                 return self._skip_result()
 
-            parsed = parse_suggestion_response(response_content, self.batch)
+            parsed = parse_suggestion_response(
+                response_content,
+                self.batch,
+                suggestion_mode=self.suggestion_mode,
+            )
             return {
                 "skip": False,
                 "prompt_tokens": prompt_tokens,

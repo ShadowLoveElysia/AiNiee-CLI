@@ -1147,6 +1147,26 @@ export const Settings: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Toggle field="enable_auto_proofread" label={t('feature_enable_auto_proofread')} />
                 <div className="space-y-2">
+                  <label className="text-xs font-semibold text-slate-400 uppercase">{t('setting_proofread_suggestion_mode')}</label>
+                  <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-700 bg-slate-900 p-1">
+                    {(['proofread', 'annotation'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => handleChange('proofread_suggestion_mode', mode)}
+                        className={`min-h-10 rounded-md px-3 py-2 text-xs font-semibold transition-colors ${
+                          (config.proofread_suggestion_mode ?? 'proofread') === mode
+                            ? 'bg-primary text-slate-950'
+                            : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        {t(`setting_proofread_suggestion_mode_${mode}`)}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] leading-relaxed text-slate-500">{t('setting_proofread_suggestion_mode_desc')}</p>
+                </div>
+                <div className="space-y-2">
                   <label className="text-xs font-semibold text-slate-400 uppercase">{t('setting_proofread_report_mode')}</label>
                   <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-700 bg-slate-900 p-1">
                     {(['archive', 'overwrite'] as const).map((mode) => (

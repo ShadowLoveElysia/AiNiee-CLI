@@ -16,6 +16,12 @@ from ModuleFolders.Infrastructure.Cache.CacheItem import CacheItem, TranslationS
 from ModuleFolders.Infrastructure.Cache.CacheProject import CacheProject
 
 
+PROOFREAD_SUGGESTION_MODES = {"proofread", "annotation"}
+ANNOTATION_ISSUE_TYPE = "annotation"
+ANNOTATION_SEVERITY = "info"
+LINE_BREAK_CHARACTERS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+
+
 class ProofreadSuggestionStatus(StrEnum):
     PENDING = "pending"
     ACCEPTED = "accepted"
@@ -23,6 +29,7 @@ class ProofreadSuggestionStatus(StrEnum):
     IGNORED = "ignored"
     STALE = "stale"
     CONFLICT = "conflict"
+    COMPLETED = "completed"
 
 
 @dataclass
@@ -74,6 +81,8 @@ class ProofreadSuggestion:
     accepted_line_hash: str = ""
     undo_available: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
+    annotation_target: str = ""
+    annotation_text: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -118,10 +127,63 @@ def normalize_suggestion_text(text: Any) -> str:
     return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
+def normalize_suggestion_mode(value: Any) -> str:
+    mode = str(value or "proofread").strip().lower()
+    if mode not in PROOFREAD_SUGGESTION_MODES:
+        raise ValueError(f"unsupported proofread suggestion mode: {value}")
+    return mode
+
+
+def contains_line_break(value: Any) -> bool:
+    return any(char in LINE_BREAK_CHARACTERS for char in str(value or ""))
+
+
+def normalize_annotation_text(value: Any) -> str:
+    raw_text = str(value or "")
+    if contains_line_break(raw_text):
+        return ""
+    text = normalize_suggestion_text(raw_text)
+    if not text:
+        return ""
+
+    wrappers = (
+        ("（注：", "）"),
+        ("（注:", "）"),
+        ("(注：", ")"),
+        ("(注:", ")"),
+    )
+    for prefix, suffix in wrappers:
+        if text.startswith(prefix):
+            if not text.endswith(suffix):
+                return ""
+            text = text[len(prefix):-len(suffix)].strip()
+            break
+    if text.startswith("注：") or text.startswith("注:"):
+        text = text[2:].strip()
+
+    if not text or contains_line_break(text) or any(char in text for char in "()（）"):
+        return ""
+    if any(prefix in text for prefix, _ in wrappers):
+        return ""
+    return text
+
+
+def build_annotation_translation(current_translation: str, annotation_text: Any) -> str:
+    translation = str(current_translation or "")
+    note = normalize_annotation_text(annotation_text)
+    if not translation or contains_line_break(translation):
+        raise ValueError("annotation target translation must be a single line")
+    if not note:
+        raise ValueError("invalid annotation text")
+    if re.search(r"[（(]注[:：].*[）)]\s*$", translation):
+        raise ValueError("translation already contains a trailing annotation")
+    return f"{translation} （注：{note}）"
+
+
 def line_hash(source_text: str, translation: str, target_field: str) -> str:
     payload = {
-        "source_text": normalize_suggestion_text(source_text),
-        "translation": normalize_suggestion_text(translation),
+        "source_text": str(source_text or ""),
+        "translation": str(translation or ""),
         "target_field": target_field,
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -210,12 +272,14 @@ def build_proofread_batch(items: list[dict[str, Any]], batch_index: int, batch_s
     lines: list[ProofreadSuggestionLine] = []
     for offset, item in enumerate(selected, start=1):
         target_field = str(item.get("target_field") or "translated_text")
-        source_text = normalize_suggestion_text(item.get("source_text", ""))
-        translation = normalize_suggestion_text(item.get("translation", ""))
+        raw_source_text = str(item.get("source_text") or "")
+        raw_translation = str(item.get("translation") or "")
+        source_text = normalize_suggestion_text(raw_source_text)
+        translation = normalize_suggestion_text(raw_translation)
         file_path = str(item.get("file_path", ""))
         text_index = int(item.get("text_index", 0))
         item_id = item_id_for(file_path, text_index)
-        line_hash_value = line_hash(source_text, translation, target_field)
+        line_hash_value = line_hash(raw_source_text, raw_translation, target_field)
         lines.append(
             ProofreadSuggestionLine(
                 batch_id=batch_id,
@@ -241,7 +305,9 @@ def build_suggestion_prompt(
     batch: ProofreadBatch,
     glossary: list[dict[str, Any]] | None = None,
     context_lines: list[dict[str, Any]] | None = None,
+    suggestion_mode: str = "proofread",
 ) -> str:
+    mode = normalize_suggestion_mode(suggestion_mode)
     context_payload = []
     for item in context_lines or []:
         context_payload.append(
@@ -284,13 +350,15 @@ def build_suggestion_prompt(
         "{{proofread_lines}}": json.dumps(line_payload, ensure_ascii=False, indent=2),
     }
 
-    prompt = _load_suggestion_prompt_template()
+    prompt = _load_suggestion_prompt_template(mode)
     for placeholder, value in replacements.items():
         prompt = prompt.replace(placeholder, value)
     return prompt
 
 
-def _load_suggestion_prompt_template() -> str:
+def _load_suggestion_prompt_template(suggestion_mode: str = "proofread") -> str:
+    mode = normalize_suggestion_mode(suggestion_mode)
+    filename = "proofread_annotation_zh.txt" if mode == "annotation" else "proofread_suggestion_zh.txt"
     prompt_path = os.path.join(
         os.path.dirname(__file__),
         "..",
@@ -299,7 +367,7 @@ def _load_suggestion_prompt_template() -> str:
         "Resource",
         "Prompt",
         "System",
-        "proofread_suggestion_zh.txt",
+        filename,
     )
     if os.path.exists(prompt_path):
         with open(prompt_path, "r", encoding="utf-8") as reader:
@@ -307,7 +375,12 @@ def _load_suggestion_prompt_template() -> str:
     raise FileNotFoundError(prompt_path)
 
 
-def parse_suggestion_response(response: Any, batch: ProofreadBatch) -> ProofreadSuggestionParseResult:
+def parse_suggestion_response(
+    response: Any,
+    batch: ProofreadBatch,
+    suggestion_mode: str = "proofread",
+) -> ProofreadSuggestionParseResult:
+    mode = normalize_suggestion_mode(suggestion_mode)
     data = _decode_suggestion_payload(response)
 
     if data is None:
@@ -334,17 +407,48 @@ def parse_suggestion_response(response: Any, batch: ProofreadBatch) -> Proofread
         if raw.get("item_id") != line.item_id or raw.get("line_hash") != line.line_hash:
             continue
 
-        severity = str(raw.get("severity") or "low").lower()
-        if severity not in {"high", "medium"}:
-            continue
-
-        suggested_translation = normalize_suggestion_text(
-            raw.get("suggested_translation", raw.get("suggested_text", ""))
-        )
-        if not suggested_translation or "\n" in suggested_translation:
-            continue
-        if suggested_translation == line.current_translation:
-            continue
+        severity = str(raw.get("severity") or "low").strip().lower()
+        issue_type = str(raw.get("issue_type") or "translation").strip().lower()
+        annotation_target = ""
+        annotation_text = ""
+        if mode == "annotation":
+            if severity != ANNOTATION_SEVERITY or issue_type != ANNOTATION_ISSUE_TYPE:
+                continue
+            raw_annotation_target = raw.get("annotation_target", "")
+            if contains_line_break(raw_annotation_target):
+                continue
+            annotation_target = normalize_suggestion_text(raw_annotation_target)
+            annotation_text = normalize_annotation_text(raw.get("annotation_text", ""))
+            if (
+                not annotation_target
+                or contains_line_break(annotation_target)
+                or annotation_target not in line.source_text
+                or not annotation_text
+            ):
+                continue
+            try:
+                suggested_translation = build_annotation_translation(
+                    line.current_translation,
+                    annotation_text,
+                )
+            except ValueError:
+                continue
+        else:
+            if issue_type == ANNOTATION_ISSUE_TYPE or severity not in {"high", "medium"}:
+                continue
+            raw_suggested_translation = raw.get(
+                "suggested_translation",
+                raw.get("suggested_text", ""),
+            )
+            if contains_line_break(raw_suggested_translation):
+                continue
+            suggested_translation = normalize_suggestion_text(
+                raw_suggested_translation
+            )
+            if not suggested_translation or contains_line_break(suggested_translation):
+                continue
+            if suggested_translation == line.current_translation:
+                continue
 
         confidence = _safe_float(raw.get("confidence", 0.0))
         suggestion = ProofreadSuggestion(
@@ -361,9 +465,11 @@ def parse_suggestion_response(response: Any, batch: ProofreadBatch) -> Proofread
             suggested_translation=suggested_translation,
             reason=normalize_suggestion_text(raw.get("reason", "")),
             severity=severity,
-            issue_type=str(raw.get("issue_type") or "translation"),
+            issue_type=issue_type,
             confidence=confidence,
             line_hash=line.line_hash,
+            annotation_target=annotation_target,
+            annotation_text=annotation_text,
         )
         suggestions.append(suggestion)
 
@@ -456,12 +562,38 @@ def apply_suggestion_to_project(project: CacheProject, suggestion: ProofreadSugg
         suggestion.status = ProofreadSuggestionStatus.CONFLICT
         return ProofreadApplyResult(suggestion.suggestion_id, suggestion.status, "line hash mismatch")
 
+    applied_translation = suggestion.suggested_translation
+    if str(suggestion.issue_type).strip().lower() == ANNOTATION_ISSUE_TYPE:
+        if contains_line_break(suggestion.annotation_target) or contains_line_break(
+            suggestion.annotation_text
+        ):
+            suggestion.status = ProofreadSuggestionStatus.CONFLICT
+            return ProofreadApplyResult(suggestion.suggestion_id, suggestion.status, "invalid annotation data")
+        annotation_target = normalize_suggestion_text(suggestion.annotation_target)
+        annotation_text = normalize_annotation_text(suggestion.annotation_text)
+        if (
+            not annotation_target
+            or contains_line_break(annotation_target)
+            or annotation_target not in cache_item.source_text
+            or not annotation_text
+        ):
+            suggestion.status = ProofreadSuggestionStatus.CONFLICT
+            return ProofreadApplyResult(suggestion.suggestion_id, suggestion.status, "invalid annotation data")
+        try:
+            applied_translation = build_annotation_translation(current_translation, annotation_text)
+        except ValueError as exc:
+            suggestion.status = ProofreadSuggestionStatus.CONFLICT
+            return ProofreadApplyResult(suggestion.suggestion_id, suggestion.status, str(exc))
+        suggestion.annotation_target = annotation_target
+        suggestion.annotation_text = annotation_text
+        suggestion.suggested_translation = applied_translation
+
     suggestion.original_translation = current_translation
-    suggestion.applied_translation = suggestion.suggested_translation
+    suggestion.applied_translation = applied_translation
     if suggestion.target_field == "polished_text":
-        cache_item.polished_text = suggestion.suggested_translation
+        cache_item.polished_text = applied_translation
     else:
-        cache_item.translated_text = suggestion.suggested_translation
+        cache_item.translated_text = applied_translation
         cache_item.polished_text = ""
     cache_item.translation_status = TranslationStatus.USER_PROOFREAD
     if cache_item.extra is None:
@@ -472,6 +604,7 @@ def apply_suggestion_to_project(project: CacheProject, suggestion: ProofreadSugg
         "status": "accepted",
         "target_field": suggestion.target_field,
         "previous_line_hash": suggestion.line_hash,
+        "issue_type": suggestion.issue_type,
     }
     suggestion.status = ProofreadSuggestionStatus.ACCEPTED
     return ProofreadApplyResult(suggestion.suggestion_id, suggestion.status)

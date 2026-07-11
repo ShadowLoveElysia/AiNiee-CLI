@@ -4,6 +4,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
+from rich.text import Text
 
 
 console = Console()
@@ -41,6 +42,39 @@ def short_text(value, limit=120):
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def build_rule_issue_panel(issues, i18n):
+    if not issues:
+        return None
+
+    issue_table = Table(show_header=True, expand=True)
+    issue_table.add_column("#", justify="right", no_wrap=True, style="dim", width=4)
+    issue_table.add_column(
+        i18n_text(i18n, "label_status", "Status"),
+        no_wrap=True,
+        width=10,
+    )
+    issue_table.add_column(
+        i18n_text(i18n, "label_details", "Details"),
+        overflow="fold",
+        ratio=1,
+    )
+    conflict_label = i18n_text(i18n, "label_conflict", "Conflict")
+    for index, issue in enumerate(issues, 1):
+        level = str(issue.get("level", ""))
+        message = str(issue.get("message", ""))
+        style = "red" if level == conflict_label else "yellow"
+        issue_table.add_row(
+            str(index),
+            Text(level, style=style),
+            Text(message),
+        )
+    return Panel(
+        issue_table,
+        title=i18n_text(i18n, "label_rule_issues", "Rule Issues"),
+        border_style="yellow",
+    )
 
 
 def _extract_exclusion_markers(item):
@@ -273,14 +307,7 @@ class RulePreviewMenu:
         if not issues:
             console.print(f"[green]{i18n_text(self.i18n, 'msg_rule_no_issues', 'No obvious rule conflicts found.')}[/green]")
             return
-        issue_table = Table(show_header=True)
-        issue_table.add_column(i18n_text(self.i18n, "label_status", "Status"))
-        issue_table.add_column(i18n_text(self.i18n, "label_details", "Details"))
-        conflict_label = i18n_text(self.i18n, "label_conflict", "Conflict")
-        for issue in issues:
-            style = "red" if issue["level"] == conflict_label else "yellow"
-            issue_table.add_row(f"[{style}]{issue['level']}[/{style}]", issue["message"])
-        console.print(Panel(issue_table, title=i18n_text(self.i18n, "label_rule_issues", "Rule Issues"), border_style="yellow"))
+        console.print(build_rule_issue_panel(issues, self.i18n))
 
     def _show_samples(self):
         sample_table = Table(show_header=True)

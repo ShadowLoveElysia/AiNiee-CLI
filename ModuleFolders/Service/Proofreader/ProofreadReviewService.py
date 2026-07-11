@@ -107,6 +107,7 @@ class ProofreadReviewService:
         if suggestion.status in {
             ProofreadSuggestionStatus.ACCEPTED,
             ProofreadSuggestionStatus.STALE,
+            ProofreadSuggestionStatus.COMPLETED,
         }:
             return ProofreadReviewActionResult(
                 False, suggestion_id, suggestion.status, "suggestion is not reviewable"
@@ -118,6 +119,7 @@ class ProofreadReviewService:
         if suggestion.status in {
             ProofreadSuggestionStatus.ACCEPTED,
             ProofreadSuggestionStatus.STALE,
+            ProofreadSuggestionStatus.COMPLETED,
         }:
             return ProofreadReviewActionResult(
                 False, suggestion_id, suggestion.status, "suggestion is not reviewable"
@@ -130,6 +132,8 @@ class ProofreadReviewService:
             return ProofreadReviewActionResult(False, suggestion_id, suggestion.status, "accepted suggestion must be undone")
         if suggestion.status == ProofreadSuggestionStatus.STALE:
             return ProofreadReviewActionResult(False, suggestion_id, suggestion.status, "stale suggestion cannot be restored")
+        if suggestion.status == ProofreadSuggestionStatus.COMPLETED:
+            return ProofreadReviewActionResult(False, suggestion_id, suggestion.status, "completed suggestion cannot be restored")
         conflict = self._conflict_if_original_line_changed(suggestion, client)
         if conflict is not None:
             return conflict
@@ -142,6 +146,7 @@ class ProofreadReviewService:
                 for item in reversed(self.store.review_history)
                 if item.get("action") in {"accepted", "rejected", "ignored", "restored"}
                 and not item.get("undone", False)
+                and not item.get("superseded", False)
             ),
             None,
         )

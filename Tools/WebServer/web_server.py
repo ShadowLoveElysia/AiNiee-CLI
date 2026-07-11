@@ -3029,6 +3029,7 @@ class CacheRestoreRequest(BaseModel):
 class ProofreadStartRequest(BaseModel):
     project_path: str
     report_mode: Optional[str] = None
+    suggestion_mode: Optional[str] = None
     overwrite_confirmed: bool = False
 
 class ProofreadSuggestionActionRequest(BaseModel):
@@ -3326,6 +3327,7 @@ class CacheUpdateRequestWithPath(BaseModel):
     item_id: int
     translation: str
     project_path: str
+    report_file: Optional[str] = None
 
 @app.put("/api/cache/items/{item_id}")
 async def update_cache_item(item_id: int, request: CacheUpdateRequestWithPath):
@@ -3354,8 +3356,12 @@ async def update_cache_item(item_id: int, request: CacheUpdateRequestWithPath):
         else:
             output_path = input_path
 
+        _, proofread_store = _load_proofread_store(output_path, request.report_file)
+
         # Find the item to update
         item_found = False
+        updated_file_path = ""
+        updated_text_index = 0
         current_idx = 0
 
         with cache_manager.file_lock:
@@ -3371,9 +3377,20 @@ async def update_cache_item(item_id: int, request: CacheUpdateRequestWithPath):
                             else:
                                 item.translated_text = new_translation
                             item.translation_status = TranslationStatus.USER_PROOFREAD
+                            if item.extra is None:
+                                item.extra = {}
+                            accepted_meta = item.extra.get("proofread_suggestion")
+                            if isinstance(accepted_meta, dict):
+                                accepted_meta["superseded_by_manual_edit"] = True
+                            item.extra["proofread_manual_edit"] = {
+                                "client": "web",
+                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                            }
 
                             # Save to file
                             cache_manager.require_save_to_file(output_path)
+                            updated_file_path = file_path
+                            updated_text_index = int(item.text_index)
                             item_found = True
                             break
 
@@ -3386,7 +3403,22 @@ async def update_cache_item(item_id: int, request: CacheUpdateRequestWithPath):
             raise HTTPException(status_code=404, detail="Cache item not found")
 
         cache_manager.flush_pending_save()
-        return {"success": True, "message": "Cache item updated successfully"}
+        proofread_store.complete_manually_edited_lines(
+            cache_manager.project,
+            file_path=updated_file_path,
+            text_index=updated_text_index,
+            client="web",
+        )
+        has_report = bool(
+            proofread_store.path.exists()
+            or proofread_store.report_path.exists()
+            or proofread_store.has_report_content()
+        )
+        return {
+            "success": True,
+            "message": "Cache item updated successfully",
+            "report": _proofread_report_payload(proofread_store) if has_report else None,
+        }
 
     except HTTPException:
         raise
@@ -3619,7 +3651,7 @@ async def update_proofread_review_state(request: ProofreadReviewStateRequest):
         store.review_state["current_suggestion_id"] = request.current_suggestion_id
     if request.active_filter is not None:
         if request.active_filter not in {
-            "pending", "ignored", "conflict", "accepted", "rejected", "all"
+            "pending", "ignored", "conflict", "accepted", "rejected", "completed", "all"
         }:
             raise HTTPException(status_code=400, detail="Invalid proofread review filter")
         store.review_state["active_filter"] = request.active_filter
@@ -3659,10 +3691,16 @@ async def start_proofread(request: ProofreadStartRequest, background_tasks: Back
     if not hasattr(cache_manager, 'project') or not cache_manager.project.files:
         raise HTTPException(status_code=400, detail="No cache data loaded")
 
-    from ModuleFolders.Service.Proofreader import ProofreadSuggestionStore
+    from ModuleFolders.Service.Proofreader import ProofreadSuggestionStore, normalize_suggestion_mode
 
     config = load_config_sync()
     report_mode = str(request.report_mode or config.get("proofread_report_mode", "archive"))
+    try:
+        suggestion_mode = normalize_suggestion_mode(
+            request.suggestion_mode or config.get("proofread_suggestion_mode", "proofread")
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     store = ProofreadSuggestionStore(output_path)
     store.load()
     if report_mode == "overwrite" and store.has_report_content() and not request.overwrite_confirmed:
@@ -3682,6 +3720,7 @@ async def start_proofread(request: ProofreadStartRequest, background_tasks: Back
         provider=str(config.get("platform", "") or ""),
         model=str(config.get("model", "") or ""),
         archive_limit=archive_limit,
+        suggestion_mode=suggestion_mode,
     )
 
     # Reset state
@@ -3696,6 +3735,7 @@ async def start_proofread(request: ProofreadStartRequest, background_tasks: Back
         "output_path": output_path,
         "report_file": store.path.name,
         "archive_path": str(archive_path) if archive_path else None,
+        "suggestion_mode": suggestion_mode,
     }
 
     # Start background task
@@ -3711,52 +3751,52 @@ async def stop_proofread():
     return {"status": "stopped"}
 
 @app.post("/api/proofread/accept")
-async def accept_proofread_issue(issue_id: int):
-    """Accept a proofread issue and apply the correction"""
-    global _proofread_state
+async def accept_proofread_issue(issue_id: str):
+    """Accept a persistent suggestion through the shared review service."""
+    from ModuleFolders.Service.Proofreader import ProofreadReviewService
 
-    cache_manager = get_cache_manager()
-    if not hasattr(cache_manager, 'project') or not cache_manager.project.files:
-        raise HTTPException(status_code=400, detail="No cache data loaded")
-
-    # Find the issue
-    issue = None
-    for i, iss in enumerate(_proofread_state["issues"]):
-        if iss.get("id") == issue_id:
-            issue = iss
-            break
-
-    if not issue:
+    issue = next(
+        (
+            item
+            for item in _proofread_state.get("issues", [])
+            if str(item.get("id", "")) == str(issue_id)
+            or str(item.get("suggestion_id", "")) == str(issue_id)
+        ),
+        None,
+    )
+    if issue is None:
         raise HTTPException(status_code=404, detail="Issue not found")
 
-    if not issue.get("corrected_translation"):
-        raise HTTPException(status_code=400, detail="No correction available")
+    suggestion_id = str(issue.get("suggestion_id") or issue.get("id") or "")
+    output_path = str(_proofread_state.get("output_path") or "")
+    if not suggestion_id or not output_path:
+        raise HTTPException(status_code=400, detail="Persistent proofread report is unavailable")
 
-    # Apply correction to cache
+    report_file = str(_proofread_state.get("report_file") or "")
+    if report_file == "ProofreadSuggestions.json":
+        report_file = ""
+    resolved_output_path, store = _load_proofread_store(output_path, report_file or None)
+    cache_manager = get_cache_manager()
+    cache_manager.load_from_file(resolved_output_path, interactive_recovery=False)
+    service = ProofreadReviewService(
+        store,
+        cache_manager.project,
+        save_project=lambda: _save_loaded_cache(resolved_output_path),
+    )
     try:
-        text_index = issue.get("text_index")
-        file_path = issue.get("file_path")
-        corrected_text = issue.get("corrected_translation")
+        result = service.accept(suggestion_id, client="web-legacy")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not result.success:
+        raise HTTPException(status_code=409, detail=result.message)
 
-        cache_file = cache_manager.project.get_file(file_path)
-        if cache_file:
-            item = cache_file.get_item(text_index)
-            if item:
-                item.translated_text = corrected_text
-                item.translation_status = 4  # AI_PROOFREAD
-
-                # Mark issue as accepted
-                issue["accepted"] = True
-                output_path = _proofread_state.get("output_path")
-                if output_path:
-                    cache_manager.require_save_to_file(output_path)
-                    cache_manager.flush_pending_save()
-
-                return {"status": "accepted", "text_index": text_index}
-
-        raise HTTPException(status_code=404, detail="Cache item not found")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to apply correction: {e}")
+    issue["accepted"] = True
+    issue["status"] = str(result.status)
+    return {
+        "status": "accepted",
+        "suggestion_id": suggestion_id,
+        "report": _proofread_report_payload(store),
+    }
 
 class ProofreadSingleRequest(BaseModel):
     project_path: str
@@ -3898,6 +3938,7 @@ def run_proofread_task():
             ProofreadSuggestionStore,
             build_proofread_batch,
             collect_suggestion_items,
+            normalize_suggestion_mode,
         )
         from ModuleFolders.Service.Proofreader.ProofreadSuggestionTask import ProofreadSuggestionTask
 
@@ -3906,6 +3947,10 @@ def run_proofread_task():
         output_path = str(_proofread_state.get("output_path") or "")
         store = ProofreadSuggestionStore(output_path)
         store.load()
+        suggestion_mode = normalize_suggestion_mode(
+            _proofread_state.get("suggestion_mode")
+            or store.run.get("suggestion_mode", "proofread")
+        )
         items = collect_suggestion_items(cache_manager.project)
         if not items:
             _proofread_state["running"] = False
@@ -3958,6 +4003,7 @@ def run_proofread_task():
                 batches[index],
                 glossary=glossary,
                 context_lines=context_for(index),
+                suggestion_mode=suggestion_mode,
             )
             task.prepare()
             return task.run()

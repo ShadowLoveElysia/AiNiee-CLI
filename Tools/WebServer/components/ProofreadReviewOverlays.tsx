@@ -11,7 +11,7 @@ import {
   X,
 } from 'lucide-react';
 
-export type ProofreadSuggestionStatus = 'pending' | 'accepted' | 'rejected' | 'ignored' | 'conflict' | 'stale';
+export type ProofreadSuggestionStatus = 'pending' | 'accepted' | 'rejected' | 'ignored' | 'conflict' | 'stale' | 'completed';
 
 export interface WebProofreadSuggestion {
   suggestion_id: string;
@@ -25,6 +25,8 @@ export interface WebProofreadSuggestion {
   reason: string;
   severity: string;
   issue_type: string;
+  annotation_target?: string;
+  annotation_text?: string;
   confidence: number;
   status: ProofreadSuggestionStatus;
   undo_available?: boolean;
@@ -56,12 +58,12 @@ export interface ProofreadSummary {
 type Translator = (key: string, ...args: any[]) => string;
 
 const markerFor = (status: ProofreadSuggestionStatus) => ({
-  pending: '#', accepted: '*', rejected: '-', ignored: '~', conflict: '!', stale: 'x',
+  pending: '#', accepted: '*', rejected: '-', ignored: '~', conflict: '!', stale: 'x', completed: '✓',
 }[status]);
 
 const toneFor = (status: ProofreadSuggestionStatus) => ({
   pending: 'text-amber-300', accepted: 'text-emerald-300', rejected: 'text-slate-500',
-  ignored: 'text-cyan-300', conflict: 'text-rose-300', stale: 'text-slate-600',
+  ignored: 'text-cyan-300', conflict: 'text-rose-300', stale: 'text-slate-600', completed: 'text-emerald-400',
 }[status]);
 
 interface ReportPanelProps {
@@ -93,12 +95,17 @@ export const ProofreadReportPanel: React.FC<ReportPanelProps> = ({
     );
   }
   return (
-    <section className="pointer-events-auto w-[270px] rounded-lg border border-slate-700 bg-slate-950/95 text-slate-100 shadow-2xl">
+    <section className="pointer-events-auto w-[270px] max-w-full rounded-lg border border-slate-700 bg-slate-950/95 text-slate-100 shadow-2xl">
       <div className="flex items-start justify-between border-b border-slate-800 px-3 py-2.5">
         <div className="min-w-0">
           <div className="truncate text-xs font-semibold">{t('cache_editor_proofread_report')}</div>
           <div className="mt-0.5 truncate text-[10px] text-slate-500">
-            {t('cache_editor_proofread_run_meta', Number(run.sequence || 1), String(run.model || '-'))}
+            {t(
+              'cache_editor_proofread_run_meta',
+              Number(run.sequence || 1),
+              String(run.model || '-'),
+              t(`setting_proofread_suggestion_mode_${String(run.suggestion_mode || 'proofread')}`),
+            )}
           </div>
         </div>
         <button type="button" onClick={onToggle} title={t('cache_editor_proofread_collapse')} className="rounded-md p-1.5 text-slate-500 hover:bg-slate-800 hover:text-white"><ChevronLeft size={14} /></button>
@@ -126,7 +133,7 @@ export const ProofreadReportPanel: React.FC<ReportPanelProps> = ({
           )}
         </div>
         <div className="mt-2 flex gap-1 overflow-x-auto pb-0.5">
-          {['pending', 'ignored', 'conflict', 'accepted', 'rejected', 'all'].map((value) => (
+          {['pending', 'ignored', 'conflict', 'accepted', 'rejected', 'completed', 'all'].map((value) => (
             <button type="button" key={value} onClick={() => onFilter(value)} className={`shrink-0 rounded px-2 py-1 text-[9px] font-semibold ${filter === value ? 'bg-primary text-slate-950' : 'bg-slate-900 text-slate-500 hover:text-white'}`}>{t(`cache_editor_proofread_filter_${value}`)}</button>
           ))}
         </div>
@@ -149,6 +156,7 @@ interface NavigatorProps {
 }
 
 export const ProofreadQuickNavigator: React.FC<NavigatorProps> = ({ t, groups, index, collapsed, onSelect, onToggle }) => {
+  const currentPosition = groups.length > 0 ? index + 1 : 0;
   const range = useMemo(() => {
     if (groups.length <= 5) return { start: 0, end: groups.length };
     const start = Math.min(Math.max(index - 2, 0), groups.length - 5);
@@ -156,12 +164,12 @@ export const ProofreadQuickNavigator: React.FC<NavigatorProps> = ({ t, groups, i
   }, [groups.length, index]);
   const move = (delta: number) => groups.length && onSelect(Math.min(Math.max(index + delta, 0), groups.length - 1));
   if (collapsed) {
-    return <button type="button" onClick={onToggle} title={t('cache_editor_proofread_quick_nav', index + 1, groups.length)} className="pointer-events-auto inline-flex h-10 items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/95 px-3 text-xs font-semibold text-amber-300 shadow-xl"><ChevronLeft size={14} />#{groups.length}</button>;
+    return <button type="button" onClick={onToggle} title={t('cache_editor_proofread_quick_nav', currentPosition, groups.length)} className="pointer-events-auto inline-flex h-10 items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/95 px-3 text-xs font-semibold text-amber-300 shadow-xl"><ChevronLeft size={14} />#{groups.length}</button>;
   }
   return (
-    <section onWheel={(event) => { event.preventDefault(); move(event.deltaY > 0 ? 1 : -1); }} className="pointer-events-auto w-[310px] rounded-lg border border-slate-700 bg-slate-950/94 p-2 shadow-2xl">
+    <section onWheel={(event) => { event.preventDefault(); move(event.deltaY > 0 ? 1 : -1); }} className="pointer-events-auto w-[310px] max-w-full rounded-lg border border-slate-700 bg-slate-950/94 p-2 shadow-2xl">
       <div className="mb-1 flex items-center justify-between px-1 text-[10px] text-slate-500">
-        <span>{t('cache_editor_proofread_quick_nav', index + 1, groups.length)}</span>
+        <span>{t('cache_editor_proofread_quick_nav', currentPosition, groups.length)}</span>
         <span className="flex gap-1"><button type="button" aria-label={t('cache_editor_previous')} onClick={() => move(-1)} className="rounded p-1 hover:bg-slate-800"><ChevronLeft size={13} /></button><button type="button" aria-label={t('cache_editor_next')} onClick={() => move(1)} className="rounded p-1 hover:bg-slate-800"><ChevronRight size={13} /></button><button type="button" aria-label={t('cache_editor_proofread_collapse')} onClick={onToggle} className="rounded p-1 hover:bg-slate-800"><X size={13} /></button></span>
       </div>
       <div className="grid gap-0.5">
@@ -197,7 +205,7 @@ interface InlineProps {
 }
 
 export const ProofreadInlineSuggestion: React.FC<InlineProps> = ({ t, suggestion, index, count, busy, onPrevious, onNext, onAccept, onReject, onIgnore, onRestore }) => (
-  <div onClick={(event) => event.stopPropagation()} className="mt-3 rounded-lg border border-amber-300/20 bg-amber-300/[0.045] p-3 text-xs">
+  <div data-proofread-layout="inline-suggestion" onClick={(event) => event.stopPropagation()} className="mt-3 rounded-lg border border-amber-300/20 bg-amber-300/[0.045] p-3 text-xs">
     <div className="flex items-center justify-between gap-3">
       <div className="flex min-w-0 items-center gap-2"><span className={`text-sm font-black ${toneFor(suggestion.status)}`}>{markerFor(suggestion.status)}</span><span className="truncate font-semibold text-slate-200">{t('cache_editor_proofread_inline_title')}</span><span className="text-[9px] text-slate-600">{suggestion.severity} · {suggestion.issue_type} · {Number(suggestion.confidence || 0).toFixed(2)}</span></div>
       {count > 1 && <div className="flex items-center gap-1 text-[9px] text-slate-500"><button type="button" aria-label={t('cache_editor_previous')} onClick={onPrevious} className="rounded p-1 hover:bg-slate-800"><ChevronLeft size={12} /></button><span>{index + 1}/{count}</span><button type="button" aria-label={t('cache_editor_next')} onClick={onNext} className="rounded p-1 hover:bg-slate-800"><ChevronRight size={12} /></button></div>}
@@ -211,7 +219,9 @@ export const ProofreadInlineSuggestion: React.FC<InlineProps> = ({ t, suggestion
         <button type="button" onClick={onAccept} disabled={busy || suggestion.status === 'conflict'} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-emerald-500 px-3 text-[11px] font-semibold text-slate-950 disabled:opacity-40"><Check size={13} />{t('cache_editor_proofread_accept')}</button>
         <button type="button" onClick={onReject} disabled={busy} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-rose-300/25 bg-rose-300/10 px-3 text-[11px] font-semibold text-rose-200 disabled:opacity-40"><X size={13} />{t('cache_editor_proofread_reject')}</button>
         <button type="button" onClick={onIgnore} disabled={busy} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 text-[11px] font-semibold text-cyan-200 disabled:opacity-40"><Clock3 size={13} />{t('cache_editor_proofread_ignore')}</button>
-      </> : <button type="button" onClick={onRestore} disabled={busy || suggestion.status === 'accepted'} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-3 text-[11px] font-semibold text-slate-300 disabled:opacity-40"><RotateCcw size={13} />{t('cache_editor_proofread_restore')}</button>}
+      </> : suggestion.status === 'completed' ? (
+        <span className="inline-flex h-8 items-center gap-1.5 rounded-md border border-emerald-400/20 bg-emerald-400/10 px-3 text-[11px] font-semibold text-emerald-300"><Check size={13} />{t('cache_editor_proofread_completed_manual')}</span>
+      ) : <button type="button" onClick={onRestore} disabled={busy || suggestion.status === 'accepted'} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-3 text-[11px] font-semibold text-slate-300 disabled:opacity-40"><RotateCcw size={13} />{t('cache_editor_proofread_restore')}</button>}
     </div>
   </div>
 );

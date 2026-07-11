@@ -88,6 +88,7 @@ class ProofreadSuggestionTUI:
         ProofreadSuggestionStatus.CONFLICT,
         ProofreadSuggestionStatus.ACCEPTED,
         ProofreadSuggestionStatus.REJECTED,
+        ProofreadSuggestionStatus.COMPLETED,
         None,
     ]
 
@@ -367,6 +368,11 @@ class ProofreadSuggestionTUI:
                 len(store.suggestions),
             ),
         )
+        suggestion_mode = str(store.run.get("suggestion_mode", "proofread") or "proofread")
+        table.add_row(
+            f"[bold]{self._tr('setting_proofread_suggestion_mode')}[/bold]",
+            self._tr(f"setting_proofread_suggestion_mode_{suggestion_mode}"),
+        )
         table.add_row(
             f"[bold]{self._tr('proofread_suggestion_filter_label')}[/bold]",
             self._tr(self._filter_label_key()),
@@ -508,7 +514,8 @@ class ProofreadSuggestionTUI:
                     ProofreadSuggestionStatus.IGNORED: 2,
                     ProofreadSuggestionStatus.ACCEPTED: 3,
                     ProofreadSuggestionStatus.REJECTED: 4,
-                    ProofreadSuggestionStatus.STALE: 5,
+                    ProofreadSuggestionStatus.COMPLETED: 5,
+                    ProofreadSuggestionStatus.STALE: 6,
                 }
                 selected = min(matches, key=lambda item: status_priority.get(item.status, 99))
 
@@ -535,6 +542,7 @@ class ProofreadSuggestionTUI:
             ProofreadSuggestionStatus.REJECTED: ("-", "dim"),
             ProofreadSuggestionStatus.IGNORED: ("~", "cyan"),
             ProofreadSuggestionStatus.CONFLICT: ("!", "red"),
+            ProofreadSuggestionStatus.COMPLETED: ("✓", "green"),
             ProofreadSuggestionStatus.STALE: ("x", "dim"),
         }
         marker, color = markers.get(suggestion.status, ("?", "white"))

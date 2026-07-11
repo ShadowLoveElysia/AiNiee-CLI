@@ -996,6 +996,17 @@ register_config(ConfigItem(
 ))
 
 register_config(ConfigItem(
+    key="proofread_suggestion_mode",
+    default="proofread",
+    level=ConfigLevel.ADVANCED,
+    config_type=ConfigType.CHOICE,
+    i18n_key="setting_proofread_suggestion_mode",
+    i18n_desc_key="setting_proofread_suggestion_mode_desc",
+    choices=["proofread", "annotation"],
+    category="advanced"
+))
+
+register_config(ConfigItem(
     key="proofread_confidence_threshold",
     default=0.7,
     level=ConfigLevel.ADVANCED,

@@ -613,7 +613,7 @@ const MainLayout: React.FC = () => {
             <Sparkles size={200} className="text-pink-300 animate-[spin_20s_linear_infinite]" />
           </div>
         )}
-        <div className="p-4 md:p-8 max-w-7xl mx-auto h-full">
+        <div className={`mx-auto h-full ${pathname === '/cache-editor' ? 'max-w-none p-0' : 'max-w-7xl p-4 md:p-8'}`}>
           {content}
         </div>
       </main>

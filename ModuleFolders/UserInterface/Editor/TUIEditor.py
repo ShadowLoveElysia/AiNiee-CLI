@@ -14,6 +14,7 @@ from rich import box
 from typing import Dict, List, Optional, Tuple
 
 from ModuleFolders.UserInterface.InputListener import InputListener
+from ModuleFolders.Infrastructure.Cache.CacheItem import TranslationStatus
 from .EditorUI import EditorUI
 from .EditorInput import EditorInput
 from .GlossaryHighlighter import GlossaryHighlighter
@@ -348,9 +349,16 @@ class TUIEditor:
                         cache_item.polished_text = new_translation
                     else:
                         cache_item.translated_text = new_translation
-                        # 如果之前没有翻译，更新状态为已翻译
-                        if cache_item.translation_status == 0:
-                            cache_item.translation_status = 1
+                    cache_item.translation_status = TranslationStatus.USER_PROOFREAD
+                    if cache_item.extra is None:
+                        cache_item.extra = {}
+                    accepted_meta = cache_item.extra.get("proofread_suggestion")
+                    if isinstance(accepted_meta, dict):
+                        accepted_meta["superseded_by_manual_edit"] = True
+                    cache_item.extra["proofread_manual_edit"] = {
+                        "client": "tui",
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    }
 
                     # 立即保存到文件系统
                     if hasattr(self, 'project_path'):

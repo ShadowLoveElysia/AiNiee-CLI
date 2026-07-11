@@ -6,7 +6,12 @@ from rich.prompt import IntPrompt, Prompt
 from rich.table import Table
 
 from ModuleFolders.Infrastructure.TaskConfig.TaskType import TaskType
-from ModuleFolders.UserInterface.RulePreview import RuleInspector, data_count, i18n_text
+from ModuleFolders.UserInterface.RulePreview import (
+    RuleInspector,
+    build_rule_issue_panel,
+    data_count,
+    i18n_text,
+)
 
 
 console = Console()
@@ -210,9 +215,7 @@ class ConfigExperience:
             console.print(
                 f"[yellow]{i18n_text(self.i18n, 'msg_rule_issue_count', 'Rule issues detected: {}').format(issue_count)}[/yellow]"
             )
-            if not compact:
-                for issue in report["issues"][:8]:
-                    console.print(f"[yellow]- {issue['message']}[/yellow]")
+            console.print(build_rule_issue_panel(report["issues"], self.i18n))
 
 
 def calculate_output_path(config, target_path):

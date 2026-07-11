@@ -156,6 +156,7 @@ class TaskConfig(Base):
         self.polishing_pre_line_counts = 2 # NEW: 润色时获取上文的行数
         self.proofread_report_mode = "archive"
         self.proofread_archive_limit = 20
+        self.proofread_suggestion_mode = "proofread"
         self.cache_backup_limit = 10
         self.cache_save_interval = 8
         self.enable_cache_backup = True
