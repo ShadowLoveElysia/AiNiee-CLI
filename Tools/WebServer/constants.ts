@@ -273,6 +273,10 @@ export const ZH_CN_LOCALE: Record<string, string> = {
     "setting_line_split_optimization_mode_tail_desc": "开启（尾巴分割模式）时，临近任务末尾会动态调整批次，直到最终剩余行数小于等于小尾巴合并额外行数，再交给尾巴合并处理。",
     "setting_retry_split_min_lines": "自动切分最小行数",
     "setting_retry_split_min_lines_desc": "翻译失败进入下一轮时，每批行数不会继续切到低于此值，避免批次过碎。例如默认20行失败后最低降到15行；若原本小于此值则不会反向增大。",
+    "setting_sparse_completion_previous_lines": "漏行补全上文行数",
+    "setting_sparse_completion_previous_lines_desc": "模型回复缺少编号时，补全请求额外附带的已有原译对照上文。角色召回仍使用独立的角色召回范围。",
+    "setting_sparse_completion_lookahead_lines": "漏行补全下文行数",
+    "setting_sparse_completion_lookahead_lines_desc": "模型回复缺少编号时，补全请求额外附带的原译对照下文。术语命中会使用完整原批次与这两个可见窗口。",
     "setting_round_limit": "最大执行轮次",
     "setting_enable_smart_round_limit": "启用智能轮次 (自动扩展)",
     "setting_enable_rate_limit": "启用速率限制",
@@ -301,6 +305,10 @@ export const ZH_CN_LOCALE: Record<string, string> = {
     "ui_new_task_desc": "开始新的小说、游戏或字幕翻译/润色任务。",
     "ui_config_desc": "管理 API 密钥、Prompt 模板、故障转移池及微调参数。",
     "ui_history_desc": "导出已完成项目，查看历史会话及管理缓存。",
+    "ui_config_load_failed": "配置暂时无法加载",
+    "ui_config_load_failed_desc": "会话已尝试自动恢复，但配置请求仍未成功。现有配置文件没有被修改。",
+    "ui_config_reload": "重新加载",
+    "ui_config_unavailable": "当前没有可用的配置。",
     "ui_btn_start": "开始处理",
     "ui_btn_edit": "编辑设置",
     "ui_btn_history": "查看历史",
@@ -1339,6 +1347,10 @@ export const EN_LOCALE: Record<string, string> = {
     "setting_line_split_optimization_mode_tail_desc": "Tail split mode dynamically adjusts nearby final batches until the final remainder is no larger than the small-tail merge extra lines, then lets tail merging handle it.",
     "setting_retry_split_min_lines": "Auto Split Minimum Lines",
     "setting_retry_split_min_lines_desc": "When a failed batch is retried in later rounds, line batches will not be reduced below this value. Example: default 20 lines can fall to 15 at minimum; values already below it are not increased.",
+    "setting_sparse_completion_previous_lines": "Missing-Line Previous Context",
+    "setting_sparse_completion_previous_lines_desc": "Previous source/translation pairs sent when completing missing response numbers. Character recall keeps its independent configured window.",
+    "setting_sparse_completion_lookahead_lines": "Missing-Line Lookahead Context",
+    "setting_sparse_completion_lookahead_lines_desc": "Following source/translation pairs sent when completing missing response numbers. Glossary matching uses the full original batch plus both visible windows.",
     "setting_enable_api_failover": "Enable API Failover",
     "setting_api_failover_threshold": "Failover Threshold",
     "menu_project_type": "Project Type",
@@ -1365,6 +1377,10 @@ export const EN_LOCALE: Record<string, string> = {
     "setting_custom_tpm_limit": "Custom TPM Limit",
     "setting_custom_tpm_limit_desc": "Max tokens per minute, 0 uses platform default",
     "setting_response_conversion_toggle": "Response Conversion (Sim/Trad)",
+    "ui_config_load_failed": "Configuration could not be loaded",
+    "ui_config_load_failed_desc": "The session recovery attempt completed, but the configuration request still failed. Existing configuration files were not changed.",
+    "ui_config_reload": "Reload",
+    "ui_config_unavailable": "No configuration is currently available.",
     "setting_auto_update": "Auto Update on Startup",
     "setting_enable_bilingual_output": "Enable Bilingual Output",
     "menu_api_pool_settings": "API Failover Pool",
@@ -2454,6 +2470,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   // Limits
   tokens_limit_switch: false,
   lines_limit: 20,
+  sparse_completion_previous_lines: 15,
+  sparse_completion_lookahead_lines: 8,
   pre_line_counts: 3,
   tokens_limit: 1500,
 
@@ -2505,8 +2523,8 @@ export const DEFAULT_CONFIG: AppConfig = {
 
   // Prompts
   interactive_mode: false,
-  translation_prompt_selection: {},
-  polishing_prompt_selection: {},
+  translation_prompt_selection: { last_selected_id: 100 },
+  polishing_prompt_selection: { last_selected_id: 10001 },
 
   // System
   show_detailed_logs: false,

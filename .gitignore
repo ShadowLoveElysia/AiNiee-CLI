@@ -76,3 +76,5 @@ Resource/rules_profiles/default.json
 /Resource/automation_progress
 Resource/queue_operations.log
 /自动化产物
+/.superpowers
+/Docs/superpowers

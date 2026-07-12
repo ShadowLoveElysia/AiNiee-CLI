@@ -50,7 +50,7 @@ dependencies = [
     "tokenizers>=0.21,<0.22",
     "onnx>=1.18.0",
     "onnxruntime>=1.20.1",
-    "babeldoc>=0.5.0",
+    "babeldoc>=0.6.3",
     "orjson>=3.10.14",
     "pdfminer-six==20250416",
     "peewee>=3.17.8",

@@ -46,6 +46,7 @@ flatbuffers>=2.0
 # sounddevice>=0.4.4 # Removed GUI/Audio dep
 
 # BabelDOC
+babeldoc>=0.6.3
 bitstring>=4.3.0
 configargparse>=1.7
 httpx[socks]>=0.27.0

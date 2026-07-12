@@ -1592,5 +1592,12 @@
     "msg_rules_profile_switched": "ルール設定に切り替えました: {}",
     "msg_auto_switched_rules_profile": "ルール設定を自動切り替えしました: {}",
     "msg_legacy_mapping_no_reliable_results": "この既存翻訳マッピング結果には信頼できる mapped 項目が見つかりませんでした（用語 {}、人物 {}）。通常抽出に近い結果のため、現在の設定へ取り込む前に再確認します。",
-    "confirm_import_unmapped_legacy_result": "今回の既存翻訳マッピングには信頼できる対応結果がありません。取り込むと現在のルール設定を汚染する可能性があります。それでも取り込みますか?"
+    "confirm_import_unmapped_legacy_result": "今回の既存翻訳マッピングには信頼できる対応結果がありません。取り込むと現在のルール設定を汚染する可能性があります。それでも取り込みますか?",
+    "setting_sparse_completion_previous_lines": "欠落行補完の前文行数",
+    "setting_sparse_completion_previous_lines_desc": "欠落した番号を補完する際に送信する前文の原文・訳文ペアです。キャラクター召回は独立した範囲を使用します。",
+    "setting_sparse_completion_lookahead_lines": "欠落行補完の後文行数",
+    "setting_sparse_completion_lookahead_lines_desc": "欠落した番号を補完する際に送信する後文の原文・訳文ペアです。用語照合はバッチ全体と表示中の文脈を使用します。",
+    "msg_sparse_completion_start": "現在のバッチの初回応答番号を事前検査した結果、{} の欠落が見つかりました。後続ラウンドでの再翻訳ではなく、欠落番号だけを補うリクエストを直ちに追加送信します ...",
+    "msg_sparse_completion_success": "現在のバッチの欠落番号 {} を補完して統合しました。既存の訳文全体の検査を続行し、合格した場合にのみキャッシュへ書き込みます ...",
+    "msg_sparse_completion_failed": "現在のバッチの欠落番号 {} を補完できなかったため、補完結果を破棄しました。元の応答に対して完全検査を行い、不合格の場合にのみ後続ラウンドで再翻訳します ..."
 }

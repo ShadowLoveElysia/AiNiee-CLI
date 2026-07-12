@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Play, Settings, FileOutput, ArrowRight, FileText, Folder } from 'lucide-react';
+import { Play, Settings, FileOutput, ArrowRight, FileText, Folder, AlertTriangle, RefreshCw } from 'lucide-react';
 import { useI18n } from '../contexts/I18nContext';
 import { useGlobal } from '../contexts/GlobalContext';
 import { DataService } from '../services/DataService';
 
 export const Dashboard: React.FC = () => {
   const { t } = useI18n();
-  const { version, config, setTaskState, activeTheme } = useGlobal(); // Use global state
+  const { version, config, configError, isConfigLoading, refreshConfig, setTaskState, activeTheme } = useGlobal(); // Use global state
   const [recentProjects, setRecentProjects] = useState<string[]>([]);
   
   const elysiaActive = activeTheme === 'elysia';
@@ -204,8 +204,29 @@ export const Dashboard: React.FC = () => {
       <div className="bg-surface border border-slate-800 rounded-xl p-4 md:p-6 min-h-[300px]">
         <h2 className="text-lg font-semibold text-white mb-4">{t('menu_recent_projects')}</h2>
         
-        {!config ? (
+        {isConfigLoading ? (
              <div className="text-slate-500 text-sm animate-pulse py-4">Loading configuration...</div>
+        ) : configError ? (
+             <div className="border border-rose-900/70 bg-rose-950/20 rounded-md p-4">
+               <div className="flex items-start gap-3">
+                 <AlertTriangle size={18} className="text-rose-400 shrink-0 mt-0.5" />
+                 <div className="min-w-0 flex-1">
+                   <h3 className="text-sm font-semibold text-rose-200">{t('ui_config_load_failed')}</h3>
+                   <p className="mt-1 text-xs leading-5 text-rose-200/70">{t('ui_config_load_failed_desc')}</p>
+                   <code className="mt-2 block break-words text-[11px] text-rose-300/80">{configError}</code>
+                 </div>
+                 <button
+                   type="button"
+                   onClick={() => void refreshConfig()}
+                   className="inline-flex h-8 items-center gap-2 rounded-md border border-rose-700 px-3 text-xs font-semibold text-rose-100 hover:bg-rose-900/40"
+                 >
+                   <RefreshCw size={14} />
+                   {t('ui_config_reload')}
+                 </button>
+               </div>
+             </div>
+        ) : !config ? (
+             <div className="text-slate-500 text-sm py-4">{t('ui_config_unavailable')}</div>
         ) : recentProjects.length === 0 ? (
              <div className="text-slate-500 text-sm italic py-4">No recent projects found in config.</div>
         ) : (

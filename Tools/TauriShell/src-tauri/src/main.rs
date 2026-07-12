@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -433,8 +433,41 @@ fn resolve_runtime_context(app_handle: &tauri::AppHandle) -> Result<RuntimeConte
     resolve_dev_context()
 }
 
-fn spawn_backend_with_uv(context: &RuntimeContext, port: u16, uv_path: &Path) -> Result<Child, String> {
+fn backend_startup_log_path(context: &RuntimeContext) -> PathBuf {
+    context.project_root.join("logs").join("backend-startup.log")
+}
+
+fn prepare_backend_startup_log(log_path: &Path) -> Result<(), String> {
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create backend log directory {}: {e}", parent.display()))?;
+    }
+    fs::write(log_path, b"")
+        .map_err(|e| format!("Failed to initialize backend log {}: {e}", log_path.display()))
+}
+
+fn backend_log_stdio(log_path: &Path) -> Result<(Stdio, Stdio), String> {
+    let output = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .map_err(|e| format!("Failed to open backend log {}: {e}", log_path.display()))?;
+    let error = output
+        .try_clone()
+        .map_err(|e| format!("Failed to clone backend log handle: {e}"))?;
+
+    // Keep both streams because Python import failures are written to stderr while uv uses stdout.
+    Ok((Stdio::from(output), Stdio::from(error)))
+}
+
+fn spawn_backend_with_uv(
+    context: &RuntimeContext,
+    port: u16,
+    uv_path: &Path,
+    log_path: &Path,
+) -> Result<Child, String> {
     let port_arg = port.to_string();
+    let (stdout, stderr) = backend_log_stdio(log_path)?;
     let mut command = Command::new(uv_path);
     command
         .arg("run")
@@ -443,19 +476,20 @@ fn spawn_backend_with_uv(context: &RuntimeContext, port: u16, uv_path: &Path) ->
         .arg(&port_arg)
         .current_dir(&context.project_root)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(stdout)
+        .stderr(stderr);
 
     command
         .spawn()
         .map_err(|e| format!("Failed to start backend with uv: {e}"))
 }
 
-fn spawn_backend_with_python(context: &RuntimeContext, port: u16) -> Result<Child, String> {
+fn spawn_backend_with_python(context: &RuntimeContext, port: u16, log_path: &Path) -> Result<Child, String> {
     let mut last_error = String::new();
     let port_arg = port.to_string();
 
     for python_cmd in ["python", "python3"] {
+        let (stdout, stderr) = backend_log_stdio(log_path)?;
         let mut command = Command::new(python_cmd);
         command
             .arg(&context.host_script)
@@ -463,8 +497,8 @@ fn spawn_backend_with_python(context: &RuntimeContext, port: u16) -> Result<Chil
             .arg(&port_arg)
             .current_dir(&context.project_root)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(stdout)
+            .stderr(stderr);
 
         match command.spawn() {
             Ok(child) => return Ok(child),
@@ -479,9 +513,9 @@ fn spawn_backend_with_python(context: &RuntimeContext, port: u16) -> Result<Chil
     ))
 }
 
-fn spawn_backend(context: &RuntimeContext, port: u16) -> Result<Child, String> {
+fn spawn_backend(context: &RuntimeContext, port: u16, log_path: &Path) -> Result<Child, String> {
     let uv_error = if let Some(uv_path) = context.uv_path.as_deref() {
-        match spawn_backend_with_uv(context, port, uv_path) {
+        match spawn_backend_with_uv(context, port, uv_path, log_path) {
             Ok(child) => return Ok(child),
             Err(err) => Some(err),
         }
@@ -489,7 +523,7 @@ fn spawn_backend(context: &RuntimeContext, port: u16) -> Result<Child, String> {
         None
     };
 
-    match spawn_backend_with_python(context, port) {
+    match spawn_backend_with_python(context, port, log_path) {
         Ok(child) => Ok(child),
         Err(py_err) => {
             if let Some(uv_err) = uv_error {
@@ -501,15 +535,56 @@ fn spawn_backend(context: &RuntimeContext, port: u16) -> Result<Child, String> {
     }
 }
 
-fn wait_for_backend(port: u16, timeout: Duration) -> bool {
+fn wait_for_backend(child: &mut Child, port: u16, timeout: Duration) -> Result<(), String> {
     let start = Instant::now();
     while start.elapsed() < timeout {
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return true;
+            return Ok(());
+        }
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|e| format!("Failed to inspect backend process: {e}"))?
+        {
+            return Err(format!("Backend process exited before becoming ready ({status})."));
         }
         thread::sleep(Duration::from_millis(200));
     }
-    false
+    Err(format!(
+        "Backend did not become ready at http://127.0.0.1:{port} within timeout."
+    ))
+}
+
+fn read_log_tail(log_path: &Path, max_lines: usize) -> String {
+    let content = read_text_if_exists(log_path).unwrap_or_default();
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
+}
+
+fn show_backend_startup_error(error: &str, log_path: &Path) {
+    // A short tail keeps the native dialog useful even when dependency setup produced a long log.
+    let tail = read_log_tail(log_path, 24);
+    let detail = if tail.trim().is_empty() {
+        error.to_string()
+    } else {
+        format!("{error}\n\n{tail}")
+    };
+    let message = format!("{detail}\n\nLog: {}", log_path.display());
+    MessageDialog::new()
+        .set_title("AiNiee startup failed")
+        .set_description(message)
+        .set_level(MessageLevel::Error)
+        .set_buttons(MessageButtons::Ok)
+        .show();
+}
+
+fn show_startup_error(error: &str) {
+    MessageDialog::new()
+        .set_title("AiNiee startup failed")
+        .set_description(error)
+        .set_level(MessageLevel::Error)
+        .set_buttons(MessageButtons::Ok)
+        .show();
 }
 
 fn stop_backend(app_handle: &tauri::AppHandle) {
@@ -536,16 +611,25 @@ fn main() {
         .setup(|app| {
             let app_handle = app.handle().clone();
             let port = parse_port();
-            let runtime_context = resolve_runtime_context(&app_handle).map_err(io_error)?;
-            let mut child = spawn_backend(&runtime_context, port).map_err(io_error)?;
+            let runtime_context = resolve_runtime_context(&app_handle).map_err(|error| {
+                show_startup_error(&error);
+                io_error(error)
+            })?;
+            let log_path = backend_startup_log_path(&runtime_context);
+            prepare_backend_startup_log(&log_path).map_err(|error| {
+                show_startup_error(&error);
+                io_error(error)
+            })?;
+            let mut child = spawn_backend(&runtime_context, port, &log_path).map_err(|error| {
+                show_backend_startup_error(&error, &log_path);
+                io_error(error)
+            })?;
 
-            if !wait_for_backend(port, Duration::from_secs(20)) {
+            if let Err(error) = wait_for_backend(&mut child, port, Duration::from_secs(20)) {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(io_error(format!(
-                    "Backend did not become ready at http://127.0.0.1:{port} within timeout."
-                ))
-                .into());
+                show_backend_startup_error(&error, &log_path);
+                return Err(io_error(error).into());
             }
 
             {

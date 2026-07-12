@@ -145,7 +145,7 @@ export interface ResponseCheckSwitch {
 }
 
 export interface PromptSelection {
-  last_selected_id?: string;
+  last_selected_id?: string | number;
   prompt_content?: string;
 }
 
@@ -293,6 +293,8 @@ export interface AppConfig {
   chunk_soft_limit_extra_lines?: number;
   line_split_optimization_mode?: 'off' | 'dynamic' | 'tail';
   retry_split_min_lines?: number;
+  sparse_completion_previous_lines?: number;
+  sparse_completion_lookahead_lines?: number;
   tokens_limit?: number;
   pre_line_counts: number;
 

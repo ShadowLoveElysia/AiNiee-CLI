@@ -1623,5 +1623,12 @@
     "msg_rules_profile_switched": "규칙 설정으로 전환했습니다: {}",
     "msg_auto_switched_rules_profile": "규칙 설정을 자동으로 전환했습니다: {}",
     "msg_legacy_mapping_no_reliable_results": "이번 기존 번역 매핑 결과에서 신뢰할 수 있는 mapped 항목을 찾지 못했습니다(용어 {}, 캐릭터 {}). 일반 추출에 가까운 결과이므로 현재 설정으로 가져오기 전에 다시 확인합니다.",
-    "confirm_import_unmapped_legacy_result": "이번 기존 번역 매핑에는 신뢰할 수 있는 매핑 결과가 없습니다. 가져오면 현재 규칙 설정이 오염될 수 있습니다. 그래도 가져올까요?"
+    "confirm_import_unmapped_legacy_result": "이번 기존 번역 매핑에는 신뢰할 수 있는 매핑 결과가 없습니다. 가져오면 현재 규칙 설정이 오염될 수 있습니다. 그래도 가져올까요?",
+    "setting_sparse_completion_previous_lines": "누락 줄 보완 이전 문맥",
+    "setting_sparse_completion_previous_lines_desc": "누락된 번호를 보완할 때 전송하는 이전 원문/번역 쌍입니다. 캐릭터 회상은 독립된 범위를 유지합니다.",
+    "setting_sparse_completion_lookahead_lines": "누락 줄 보완 다음 문맥",
+    "setting_sparse_completion_lookahead_lines_desc": "누락된 번호를 보완할 때 전송하는 다음 원문/번역 쌍입니다. 용어 일치는 전체 배치와 표시된 문맥을 사용합니다.",
+    "msg_sparse_completion_start": "현재 배치의 첫 응답 번호 사전 검사에서 누락 번호 {}를 발견했습니다. 이후 라운드 재번역이 아니라 누락 번호만 보완하는 요청을 즉시 한 번 추가합니다 ...",
+    "msg_sparse_completion_success": "현재 배치의 누락 번호 {}를 보완해 병합했습니다. 이제 기존 전체 번역 검사를 계속하며, 통과한 경우에만 캐시에 기록합니다 ...",
+    "msg_sparse_completion_failed": "현재 배치의 누락 번호 {}를 보완하지 못해 보완 결과를 폐기했습니다. 이제 원래 응답을 전체 검사하고, 통과하지 못한 경우에만 이후 라운드에서 재번역합니다 ..."
 }

@@ -1613,5 +1613,12 @@
     "msg_rules_profile_switched": "Switched to rules profile: {}",
     "msg_auto_switched_rules_profile": "Auto-switched rules profile to: {}",
     "msg_legacy_mapping_no_reliable_results": "No reliable mapped legacy items were detected in this mapping result (terms {}, characters {}). This looks more like ordinary extraction; importing into the current configuration will require confirmation.",
-    "confirm_import_unmapped_legacy_result": "This legacy mapping run produced no reliable mappings. Importing it may pollute the current rules profile. Import anyway?"
+    "confirm_import_unmapped_legacy_result": "This legacy mapping run produced no reliable mappings. Importing it may pollute the current rules profile. Import anyway?",
+    "setting_sparse_completion_previous_lines": "Missing-Line Previous Context",
+    "setting_sparse_completion_previous_lines_desc": "Previous source/translation pairs sent for missing response numbers; character recall keeps its independent window.",
+    "setting_sparse_completion_lookahead_lines": "Missing-Line Lookahead Context",
+    "setting_sparse_completion_lookahead_lines_desc": "Following source/translation pairs sent for missing response numbers; glossary matching uses the full batch and visible context.",
+    "msg_sparse_completion_start": "The initial response number precheck found missing numbers {} in the current batch; immediately sending one missing-number-only request (not a later-round retranslation) ...",
+    "msg_sparse_completion_success": "Missing numbers {} were completed and merged into the current batch; now running the existing full translation checks, and writing to cache only if they pass ...",
+    "msg_sparse_completion_failed": "Could not complete missing numbers {} in the current batch; the supplement was discarded. The original response will now undergo full checks and enter a later retranslation round only if it fails ..."
 }

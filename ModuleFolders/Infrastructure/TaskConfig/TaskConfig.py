@@ -97,8 +97,8 @@ class TaskConfig(Base):
         # 平台和 API 设置默认值
         self.platforms = {}
         self.api_settings = {}
-        self.translation_prompt_selection = {}
-        self.polishing_prompt_selection = {}
+        self.translation_prompt_selection = {"last_selected_id": 100}
+        self.polishing_prompt_selection = {"last_selected_id": 10001}
         self.user_thread_counts = 0
         self.auto_set_output_path = False
         self.request_timeout = 60
@@ -145,6 +145,8 @@ class TaskConfig(Base):
         self.chunk_soft_limit_extra_lines = 10
         self.line_split_optimization_mode = "off"
         self.retry_split_min_lines = 15
+        self.sparse_completion_previous_lines = 15
+        self.sparse_completion_lookahead_lines = 8
         self.tokens_limit = 1500 # NEW: 每次翻译的 Token 限制，在 Line 模式下无效
         self.pre_line_counts = 3 # NEW: 每次翻译获取上文的行数
         self.actual_thread_counts = 3 # NEW: 实际线程数

@@ -701,8 +701,27 @@ async def web_session_middleware(request: Request, call_next):
             httponly=True,
             samesite="lax",
         )
+        content_type = response.headers.get("content-type", "").lower()
+        if "text/html" in content_type:
+            # WebView may reuse a cached SPA document without contacting the restarted backend.
+            response.headers["Cache-Control"] = "no-cache"
 
     return response
+
+
+@app.post("/api/session/bootstrap", status_code=204)
+async def bootstrap_web_session(request: Request, response: Response):
+    """Establish the short-lived browser channel before accessing sensitive APIs."""
+    origin = request.headers.get("origin", "").rstrip("/")
+    expected_origin = f"{request.url.scheme}://{request.headers.get('host', '')}".rstrip("/")
+    if origin and origin != expected_origin:
+        raise HTTPException(status_code=403, detail="Web UI session bootstrap requires a same-origin request.")
+    response.set_cookie(
+        key=WEB_SESSION_COOKIE_NAME,
+        value=WEB_SESSION_TOKEN,
+        httponly=True,
+        samesite="lax",
+    )
 
 def get_config_mode():
     """Checks if the config is in 'profile' mode or 'legacy' single-file mode."""
@@ -972,6 +991,28 @@ def _load_active_config_payload() -> Dict[str, Any]:
 
     _config_cache[cache_key] = loaded_config
     return loaded_config
+
+
+def _is_prompt_selection_valid(selection: Any, builtin_ids: set[int]) -> bool:
+    if not isinstance(selection, dict):
+        return False
+    selected_id = selection.get("last_selected_id")
+    if selected_id in builtin_ids:
+        return True
+    prompt_content = selection.get("prompt_content")
+    return selected_id not in (None, "") and isinstance(prompt_content, str) and bool(prompt_content.strip())
+
+
+def _missing_prompt_selections(task: str, config: Dict[str, Any]) -> List[str]:
+    task_name = str(task or "").lower()
+    missing = []
+    if task_name in ("translate", "translation", "all_in_one", "translate_and_polish"):
+        if not _is_prompt_selection_valid(config.get("translation_prompt_selection"), {100, 200, 300}):
+            missing.append("translation")
+    if task_name in ("polish", "polishing", "all_in_one", "translate_and_polish"):
+        if not _is_prompt_selection_valid(config.get("polishing_prompt_selection"), {10001}):
+            missing.append("polishing")
+    return missing
 
 
 @app.get("/api/config")
@@ -2736,6 +2777,24 @@ async def create_platform(request: PlatformCreateRequest):
 async def run_task(payload: TaskPayload):
     if task_manager.status == "running":
         raise HTTPException(status_code=409, detail="A task is already running.")
+
+    active_config = _load_active_config_payload()
+    missing_prompts = _missing_prompt_selections(payload.task, active_config)
+    if missing_prompts:
+        labels = {
+            "translation": _web_tr(
+                "msg_prompt_guard_translation_missing",
+                "Translation prompt is not selected",
+                config=active_config,
+            ),
+            "polishing": _web_tr(
+                "msg_prompt_guard_polishing_missing",
+                "Polishing prompt is not selected",
+                config=active_config,
+            ),
+        }
+        detail = "; ".join(labels[item] for item in missing_prompts)
+        raise HTTPException(status_code=422, detail=detail)
 
     if payload.manga:
         manga_status = get_manga_feature_status(require_models=False)

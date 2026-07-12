@@ -1090,6 +1090,30 @@ export const Settings: React.FC = () => {
                      className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:border-primary text-sm"
                    />
                  </div>
+                 <div className="space-y-2">
+                   <label className="text-xs font-semibold text-slate-400 uppercase">{t('setting_sparse_completion_previous_lines')}</label>
+                   <p className="text-[10px] text-slate-500 mb-1">{t('setting_sparse_completion_previous_lines_desc')}</p>
+                   <input
+                     type="number"
+                     min={0}
+                     max={100}
+                     value={config.sparse_completion_previous_lines ?? 15}
+                     onChange={(e) => handleChange('sparse_completion_previous_lines', Math.max(0, Math.min(100, parseInt(e.target.value) || 0)))}
+                     className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:border-primary text-sm"
+                   />
+                 </div>
+                 <div className="space-y-2">
+                   <label className="text-xs font-semibold text-slate-400 uppercase">{t('setting_sparse_completion_lookahead_lines')}</label>
+                   <p className="text-[10px] text-slate-500 mb-1">{t('setting_sparse_completion_lookahead_lines_desc')}</p>
+                   <input
+                     type="number"
+                     min={0}
+                     max={100}
+                     value={config.sparse_completion_lookahead_lines ?? 8}
+                     onChange={(e) => handleChange('sparse_completion_lookahead_lines', Math.max(0, Math.min(100, parseInt(e.target.value) || 0)))}
+                     className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:border-primary text-sm"
+                   />
+                 </div>
                </div>
 
                {isConsistencyEnabled && !config.tokens_limit_switch && (

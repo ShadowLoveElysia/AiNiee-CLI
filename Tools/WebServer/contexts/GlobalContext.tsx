@@ -59,6 +59,8 @@ interface GlobalContextType {
 
   // Config
   config: AppConfig | null;
+  configError: string | null;
+  isConfigLoading: boolean;
   setConfig: (c: AppConfig | null) => void;
   refreshConfig: () => Promise<void>;
   profiles: string[];
@@ -77,6 +79,8 @@ const GlobalContext = createContext<GlobalContextType | undefined>(undefined);
 export const GlobalProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [version, setVersion] = useState<string>("Loading...");
   const [config, setConfigState] = useState<AppConfig | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [isConfigLoading, setIsConfigLoading] = useState(true);
   const [profiles, setProfiles] = useState<string[]>([]);
   const [rulesProfiles, setRulesProfiles] = useState<string[]>([]);
 
@@ -247,6 +251,8 @@ export const GlobalProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   }, []);
 
   const refreshConfig = async () => {
+    setIsConfigLoading(true);
+    setConfigError(null);
     try {
       const data = await DataService.getConfig();
       const normalized = normalizeConfig(data);
@@ -267,6 +273,10 @@ export const GlobalProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       });
     } catch (e) {
       console.error("Global Context: Failed to load config", e);
+      setConfigState(null);
+      setConfigError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsConfigLoading(false);
     }
   };
 
@@ -295,6 +305,8 @@ export const GlobalProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       rippleData,
       triggerRipple,
       config,
+      configError,
+      isConfigLoading,
       setConfig,
       refreshConfig,
       profiles,

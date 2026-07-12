@@ -1623,5 +1623,12 @@
     "msg_rules_profile_switched": "Cambiado al perfil de reglas: {}",
     "msg_auto_switched_rules_profile": "Perfil de reglas cambiado automáticamente a: {}",
     "msg_legacy_mapping_no_reliable_results": "No se detectaron elementos mapped fiables en este resultado de mapeo previo (términos {}, personajes {}). El resultado parece una extracción normal; se pedirá confirmación antes de importarlo a la configuración actual.",
-    "confirm_import_unmapped_legacy_result": "Este mapeo de traducción previa no produjo correspondencias fiables. Importarlo puede contaminar el perfil de reglas actual. ¿Importar de todos modos?"
+    "confirm_import_unmapped_legacy_result": "Este mapeo de traducción previa no produjo correspondencias fiables. Importarlo puede contaminar el perfil de reglas actual. ¿Importar de todos modos?",
+    "setting_sparse_completion_previous_lines": "Contexto anterior para líneas omitidas",
+    "setting_sparse_completion_previous_lines_desc": "Pares de origen y traducción anteriores enviados al completar números omitidos; la recuperación de personajes conserva su ventana independiente.",
+    "setting_sparse_completion_lookahead_lines": "Contexto posterior para líneas omitidas",
+    "setting_sparse_completion_lookahead_lines_desc": "Pares de origen y traducción posteriores enviados al completar números omitidos; el glosario usa el lote completo y el contexto visible.",
+    "msg_sparse_completion_start": "La comprobación preliminar de la respuesta inicial detectó los números omitidos {} en el lote actual; se envía de inmediato una solicitud exclusiva para completarlos (no es una retraducción de una ronda posterior) ...",
+    "msg_sparse_completion_success": "Los números omitidos {} se completaron y fusionaron en el lote actual; ahora se ejecutarán las comprobaciones completas existentes y solo se escribirá en la caché si se superan ...",
+    "msg_sparse_completion_failed": "No se pudieron completar los números omitidos {} del lote actual; el complemento se descartó. Ahora se comprobará la respuesta original y solo pasará a una ronda posterior de retraducción si no supera las comprobaciones ..."
 }

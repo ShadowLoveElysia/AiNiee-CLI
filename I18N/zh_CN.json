@@ -1639,5 +1639,12 @@
     "msg_rules_profile_switched": "已切换到规则配置: {}",
     "msg_auto_switched_rules_profile": "已自动切换规则配置: {}",
     "msg_legacy_mapping_no_reliable_results": "旧译文映射结果没有检测到可靠 mapped 条目（术语 {}，角色 {}）。本次结果更像普通抽取；导入当前配置前会要求再次确认。",
-    "confirm_import_unmapped_legacy_result": "本次旧译文映射没有可靠映射结果，继续导入可能污染当前规则配置。是否仍要导入?"
+    "confirm_import_unmapped_legacy_result": "本次旧译文映射没有可靠映射结果，继续导入可能污染当前规则配置。是否仍要导入?",
+    "setting_sparse_completion_previous_lines": "漏行补全上文行数",
+    "setting_sparse_completion_previous_lines_desc": "补全缺失编号时附带的已有原译对照上文；角色召回仍使用独立范围。",
+    "setting_sparse_completion_lookahead_lines": "漏行补全下文行数",
+    "setting_sparse_completion_lookahead_lines_desc": "补全缺失编号时附带的原译对照下文；术语命中使用完整批次和可见前后文。",
+    "msg_sparse_completion_start": "当前批次首次响应的编号预检发现缺失 {}，正在立即追加一次仅补缺号请求（不是下一轮重译） ...",
+    "msg_sparse_completion_success": "当前批次缺失编号 {} 已补全并合并，现继续执行原有完整译文检查；检查通过后才会写入缓存 ...",
+    "msg_sparse_completion_failed": "当前批次缺失编号 {} 补全失败，补全结果已丢弃；现对原响应执行完整检查，未通过时才进入下一轮重译 ..."
 }

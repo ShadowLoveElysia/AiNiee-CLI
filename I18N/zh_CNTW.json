@@ -1623,5 +1623,12 @@
     "msg_rules_profile_switched": "已切換到規則設定檔: {}",
     "msg_auto_switched_rules_profile": "已自動切換規則設定檔: {}",
     "msg_legacy_mapping_no_reliable_results": "舊譯文映射結果沒有偵測到可靠 mapped 條目（術語 {}，角色 {}）。本次結果更像一般抽取；匯入目前設定前會要求再次確認。",
-    "confirm_import_unmapped_legacy_result": "本次舊譯文映射沒有可靠映射結果，繼續匯入可能污染目前規則設定。是否仍要匯入?"
+    "confirm_import_unmapped_legacy_result": "本次舊譯文映射沒有可靠映射結果，繼續匯入可能污染目前規則設定。是否仍要匯入?",
+    "setting_sparse_completion_previous_lines": "漏行補全上文行數",
+    "setting_sparse_completion_previous_lines_desc": "補全缺失編號時附帶的已有原譯對照上文；角色召回仍使用獨立範圍。",
+    "setting_sparse_completion_lookahead_lines": "漏行補全下文行數",
+    "setting_sparse_completion_lookahead_lines_desc": "補全缺失編號時附帶的原譯對照下文；術語命中使用完整批次和可見前後文。",
+    "msg_sparse_completion_start": "目前批次首次回應的編號預檢發現缺失 {}，正在立即追加一次僅補缺號請求（不是下一輪重譯） ...",
+    "msg_sparse_completion_success": "目前批次缺失編號 {} 已補全並合併，現繼續執行原有完整譯文檢查；檢查通過後才會寫入快取 ...",
+    "msg_sparse_completion_failed": "目前批次缺失編號 {} 補全失敗，補全結果已捨棄；現對原回應執行完整檢查，未通過時才進入下一輪重譯 ..."
 }

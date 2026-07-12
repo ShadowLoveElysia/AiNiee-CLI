@@ -231,6 +231,30 @@ register_config(ConfigItem(
 ))
 
 register_config(ConfigItem(
+    key="sparse_completion_previous_lines",
+    default=15,
+    level=ConfigLevel.USER,
+    config_type=ConfigType.INT,
+    i18n_key="setting_sparse_completion_previous_lines",
+    i18n_desc_key="setting_sparse_completion_previous_lines_desc",
+    min_value=0,
+    max_value=100,
+    category="translation"
+))
+
+register_config(ConfigItem(
+    key="sparse_completion_lookahead_lines",
+    default=8,
+    level=ConfigLevel.USER,
+    config_type=ConfigType.INT,
+    i18n_key="setting_sparse_completion_lookahead_lines",
+    i18n_desc_key="setting_sparse_completion_lookahead_lines_desc",
+    min_value=0,
+    max_value=100,
+    category="translation"
+))
+
+register_config(ConfigItem(
     key="tokens_limit",
     default=1500,
     level=ConfigLevel.ADVANCED,

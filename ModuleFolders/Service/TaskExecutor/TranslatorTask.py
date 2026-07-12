@@ -20,6 +20,11 @@ from ModuleFolders.Domain.PromptBuilder.PromptBuilderLocal import PromptBuilderL
 from ModuleFolders.Domain.PromptBuilder.PromptBuilderSakura import PromptBuilderSakura
 from ModuleFolders.Domain.ResponseExtractor.ResponseExtractor import ResponseExtractor
 from ModuleFolders.Domain.ResponseChecker.ResponseChecker import ResponseChecker
+from ModuleFolders.Domain.ResponseChecker.SparseTranslationCompletion import (
+    SparseCompletionContext,
+    build_sparse_completion_request,
+    merge_sparse_completion_response,
+)
 from ModuleFolders.Infrastructure.RequestLimiter.RequestLimiter import RequestLimiter
 from ModuleFolders.Infrastructure.Tokener.Tokener import Tokener
 
@@ -57,6 +62,8 @@ class TranslatorTask(Base):
         # 角色召回上下文仅用于本地判断，不会直接进入 LLM 提示词。
         self.character_recall_previous_items = []
         self.character_recall_lookahead_items = []
+        self.sparse_completion_previous_items = []
+        self.sparse_completion_lookahead_items = []
         self._prepared = False
         self.consistency_context_provider = None
         self.consistency_state_updater = None
@@ -64,6 +71,7 @@ class TranslatorTask(Base):
         self._pending_consistency_update = None
         self.translation_memory_provider = None
         self.translation_memory_references = []
+        self.prompt_config = config
 
 
     # 设置缓存数据
@@ -81,6 +89,115 @@ class TranslatorTask(Base):
     def set_character_recall_items(self, previous_items: list[CacheItem], lookahead_items: list[CacheItem]) -> None:
         self.character_recall_previous_items = previous_items or []
         self.character_recall_lookahead_items = lookahead_items or []
+
+    def set_sparse_completion_context_items(
+        self,
+        previous_items: list[CacheItem],
+        lookahead_items: list[CacheItem],
+    ) -> None:
+        self.sparse_completion_previous_items = previous_items or []
+        self.sparse_completion_lookahead_items = lookahead_items or []
+
+    def build_sparse_completion_request(self, response_content: str):
+        if getattr(self.config, "translation_consistency_enhancement", False):
+            return None
+        return build_sparse_completion_request(
+            config=self.prompt_config,
+            response_content=response_content,
+            source_text_dict=self.source_text_dict,
+            context=SparseCompletionContext(
+                previous_items=self.sparse_completion_previous_items,
+                lookahead_items=self.sparse_completion_lookahead_items,
+            ),
+            base_system_prompt=self.system_prompt,
+            character_recall_previous_text_list=self.character_recall_previous_text_list,
+            character_recall_lookahead_text_list=self.character_recall_lookahead_text_list,
+            source_lang=self.source_lang,
+        )
+
+    def try_sparse_completion(self, response_content: str, platform_config: dict) -> tuple[str, int, int]:
+        request = self.build_sparse_completion_request(response_content)
+        if request is None:
+            return response_content, 0, 0
+
+        self.log_sparse_completion_start(request.required_numbers)
+        if not self.wait_for_sparse_completion_rate_limit(request):
+            self.log_sparse_completion_failed(request.required_numbers)
+            return response_content, 0, 0
+
+        requester = LLMRequester()
+        skip, _, supplement, prompt_tokens, completion_tokens = requester.sent_request(
+            request.messages,
+            request.system_prompt,
+            platform_config,
+        )
+        if skip or not supplement:
+            self.log_sparse_completion_failed(request.required_numbers)
+            return response_content, prompt_tokens or 0, completion_tokens or 0
+
+        merged = self.merge_sparse_completion_response(
+            response_content,
+            supplement,
+            request.required_numbers,
+        )
+        return merged, prompt_tokens or 0, completion_tokens or 0
+
+    def merge_sparse_completion_response(
+        self,
+        response_content: str,
+        supplement: str,
+        required_numbers,
+    ) -> str:
+        merged = merge_sparse_completion_response(
+            response_content,
+            supplement,
+            expected_numbers=range(1, len(self.source_text_dict) + 1),
+            required_numbers=required_numbers,
+        )
+        if merged is None:
+            self.log_sparse_completion_failed(required_numbers)
+            return response_content
+        self.extra_log.append(
+            "Sparse completion restored response numbers: "
+            + ", ".join(str(number) for number in required_numbers)
+        )
+        self.log_sparse_completion_success(required_numbers)
+        return merged
+
+    def sparse_completion_request_tokens(self, request) -> int:
+        return max(1, Tokener().calculate_tokens(request.messages, request.system_prompt) or 0)
+
+    def wait_for_sparse_completion_rate_limit(self, request, timeout: float = 600) -> bool:
+        if self.request_limiter is None:
+            return True
+
+        estimated_tokens = self.sparse_completion_request_tokens(request)
+        wait_started = time.time()
+        while True:
+            if Base.work_status == Base.STATUS.STOPING or not Base.is_task_session_active(
+                getattr(self, "task_session_id", Base.current_task_session())
+            ):
+                return False
+            if self.request_limiter.check_limiter(estimated_tokens):
+                return True
+            if time.time() - wait_started > timeout:
+                return False
+            time.sleep(0.1)
+
+    def log_sparse_completion_start(self, required_numbers) -> None:
+        numbers = ", ".join(str(number) for number in required_numbers)
+        template = self.tra("msg_sparse_completion_start")
+        self.info(f"[{getattr(self, 'task_id', '???')}] {template.format(numbers)}")
+
+    def log_sparse_completion_success(self, required_numbers) -> None:
+        numbers = ", ".join(str(number) for number in required_numbers)
+        template = self.tra("msg_sparse_completion_success")
+        self.info(f"[{getattr(self, 'task_id', '???')}] {template.format(numbers)}")
+
+    def log_sparse_completion_failed(self, required_numbers) -> None:
+        numbers = ", ".join(str(number) for number in required_numbers)
+        template = self.tra("msg_sparse_completion_failed")
+        self.warning(f"[{getattr(self, 'task_id', '???')}] {template.format(numbers)}")
 
     def set_consistency_context_provider(self, provider) -> None:
         self.consistency_context_provider = provider
@@ -146,6 +263,7 @@ class TranslatorTask(Base):
             )
         
         prompt_config = self._config_for_prompt()
+        self.prompt_config = prompt_config
 
         # 生成请求指令
         if target_platform == "sakura":
@@ -498,6 +616,15 @@ class TranslatorTask(Base):
             return {}
 
         # 提取回复内容
+        sparse_prompt_tokens = 0
+        sparse_completion_tokens = 0
+        response_content, sparse_prompt_tokens, sparse_completion_tokens = self.try_sparse_completion(
+            response_content,
+            platform_config,
+        )
+        prompt_tokens += sparse_prompt_tokens
+        completion_tokens += sparse_completion_tokens
+
         response_dict = ResponseExtractor.text_extraction(self, self.source_text_dict, response_content)
         response_dict = ResponseExtractor.normalize_numbered_prefixes(self, response_dict, self.source_text_dict)
 

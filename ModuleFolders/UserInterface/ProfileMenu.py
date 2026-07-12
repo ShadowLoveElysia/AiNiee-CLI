@@ -12,7 +12,9 @@ from rich.table import Table
 
 from ModuleFolders.Infrastructure.TaskConfig.ConfigProfileService import (
     atomic_write_json,
+    deep_merge,
     load_json_file,
+    load_master_preset,
     resolve_profile_path,
     split_effective_config,
 )
@@ -99,10 +101,11 @@ class ProfileMenu:
             return
 
         if new_name and not os.path.exists(new_path):
+            preset = load_master_preset()
             if os.path.exists(active_path):
-                base_config = load_json_file(active_path, {})
+                base_config = deep_merge(preset, load_json_file(active_path, {}))
             else:
-                base_config = self.host.config
+                base_config = deep_merge(preset, self.host.config)
             settings_only, _, _ = split_effective_config(base_config)
             atomic_write_json(new_path, settings_only)
             console.print(f"[green]{self.i18n.get('msg_profile_created').format(new_name)}[/green]")

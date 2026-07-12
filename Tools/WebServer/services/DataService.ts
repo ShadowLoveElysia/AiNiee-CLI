@@ -5,6 +5,34 @@ import { MangaDeleteRuntimeValidationHistoryResult, MangaExportFormat, MangaExpo
 // Base API URL
 const API_BASE = '/api';
 
+export class ApiRequestError extends Error {
+    constructor(message: string, public readonly status: number) {
+        super(message);
+        this.name = 'ApiRequestError';
+    }
+}
+
+const responseError = async (response: Response, fallback: string): Promise<ApiRequestError> => {
+    const payload = await response.json().catch(() => ({}));
+    return new ApiRequestError(payload.detail || fallback, response.status);
+};
+
+let webSessionBootstrap: Promise<void> | null = null;
+
+const bootstrapWebSession = async (force = false): Promise<void> => {
+    if (!webSessionBootstrap || force) {
+        webSessionBootstrap = fetch(`${API_BASE}/session/bootstrap`, { method: 'POST' }).then(async response => {
+            if (!response.ok) throw await responseError(response, 'Failed to establish Web UI session');
+        });
+    }
+    try {
+        await webSessionBootstrap;
+    } catch (error) {
+        webSessionBootstrap = null;
+        throw error;
+    }
+};
+
 interface TaskStatusResponse {
     stats: TaskStats;
     logs: LogEntry[];
@@ -51,8 +79,14 @@ export const DataService = {
 
     async getConfig(): Promise<AppConfig> {
         try {
-            const res = await fetch(`${API_BASE}/config`);
-            if (!res.ok) throw new Error('Failed to fetch config');
+            await bootstrapWebSession();
+            let res = await fetch(`${API_BASE}/config`);
+            if (res.status === 403) {
+                // A restarted backend has a new in-memory token even when WebView reused its SPA cache.
+                await bootstrapWebSession(true);
+                res = await fetch(`${API_BASE}/config`);
+            }
+            if (!res.ok) throw await responseError(res, 'Failed to fetch config');
             return await res.json();
         } catch (error) {
             console.error("API Error: getConfig", error);
@@ -1010,7 +1044,7 @@ export const DataService = {
             });
             
             const data = await res.json();
-            if (!res.ok) throw new Error(data.error || 'Failed to start task');
+            if (!res.ok) throw new Error(data.detail || data.error || 'Failed to start task');
             return data;
         } catch (error: any) {
             console.error("API Error: startTask", error);

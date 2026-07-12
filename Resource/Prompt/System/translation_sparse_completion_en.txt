@@ -1,0 +1,25 @@
+### Sparse Missing-Line Completion Task
+
+The following content is provided only to restore translations omitted from the previous response.
+
+Mandatory rules:
+- Translate only entries listed under "Required response numbers".
+- Existing translations and surrounding text are read-only context for characters, references, tone, terminology, and plot. Do not retranslate or rewrite them.
+- Preserve every original main number exactly. Do not renumber entries.
+- Return each required number exactly once and do not return any other number.
+- Do not output explanations, analysis, Markdown fences, or text outside the textarea.
+
+{{previous_context}}
+
+### Current batch (read-only; complete only entries marked missing)
+{{current_batch}}
+
+{{lookahead_context}}
+
+### Required response numbers
+{{required_numbers}}
+
+Output only:
+<textarea>
+{{response_example}}
+</textarea>

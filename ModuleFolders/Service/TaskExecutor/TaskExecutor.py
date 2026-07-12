@@ -251,6 +251,29 @@ class TaskExecutor(Base):
         lookahead_items = cache_file.items[end_idx + 1:end_idx + 1 + lookahead_count] if lookahead_count > 0 else []
         return previous_items, lookahead_items
 
+    def _build_sparse_completion_context_window(self, file_path: str, chunk: list) -> tuple[list, list]:
+        if not chunk or not self.cache_manager.project:
+            return [], []
+
+        previous_count = max(0, min(100, _safe_int(getattr(self.config, "sparse_completion_previous_lines", 15), 15)))
+        lookahead_count = max(0, min(100, _safe_int(getattr(self.config, "sparse_completion_lookahead_lines", 8), 8)))
+        if previous_count <= 0 and lookahead_count <= 0:
+            return [], []
+
+        cache_file = self.cache_manager.project.get_file(file_path)
+        if not cache_file or not cache_file.items:
+            return [], []
+
+        try:
+            start_idx = cache_file.index_of(chunk[0].text_index)
+            end_idx = cache_file.index_of(chunk[-1].text_index)
+        except (KeyError, IndexError, AttributeError):
+            return [], []
+
+        previous_items = cache_file.items[max(0, start_idx - previous_count):start_idx] if previous_count > 0 else []
+        lookahead_items = cache_file.items[end_idx + 1:end_idx + 1 + lookahead_count] if lookahead_count > 0 else []
+        return previous_items, lookahead_items
+
     def _with_filter_progress_info(self, stats_dict: dict) -> dict:
         raw_total = self.cache_manager.get_item_count()
         excluded_total = self.cache_manager.get_item_count_by_status(TranslationStatus.EXCLUDED)
@@ -444,6 +467,14 @@ class TaskExecutor(Base):
                 if content:
                     from ModuleFolders.Domain.ResponseExtractor.ResponseExtractor import ResponseExtractor
                     from ModuleFolders.Domain.ResponseChecker.ResponseChecker import ResponseChecker
+                    content, sparse_pt, sparse_ct = await executor_self._try_sparse_completion_async(
+                        task,
+                        content,
+                        requester,
+                        platform_config,
+                    )
+                    pt += sparse_pt
+                    ct += sparse_ct
 
                     response_dict = ResponseExtractor.text_extraction(task, task.source_text_dict, content)
                     response_dict = ResponseExtractor.normalize_numbered_prefixes(task, response_dict, task.source_text_dict)
@@ -568,6 +599,55 @@ class TaskExecutor(Base):
 
         self.info(f"[bold cyan]使用异步模式执行任务 (并发数: {max_concurrency})...[/bold cyan]")
         asyncio.run(run_all_tasks())
+
+    @staticmethod
+    async def _try_sparse_completion_async(task, content, requester, platform_config):
+        sparse_request = task.build_sparse_completion_request(content)
+        if sparse_request is None:
+            return content, 0, 0
+
+        task.log_sparse_completion_start(sparse_request.required_numbers)
+        if not await TaskExecutor._wait_sparse_completion_rate_limit_async(task, sparse_request):
+            task.log_sparse_completion_failed(sparse_request.required_numbers)
+            return content, 0, 0
+
+        skip, _, supplement, prompt_tokens, completion_tokens = await requester.send_request_async(
+            sparse_request.messages,
+            sparse_request.system_prompt,
+            platform_config,
+        )
+        prompt_tokens = prompt_tokens or 0
+        completion_tokens = completion_tokens or 0
+        if skip or not supplement:
+            task.log_sparse_completion_failed(sparse_request.required_numbers)
+            return content, prompt_tokens, completion_tokens
+
+        merged = task.merge_sparse_completion_response(
+            content,
+            supplement,
+            sparse_request.required_numbers,
+        )
+        return merged, prompt_tokens, completion_tokens
+
+    @staticmethod
+    async def _wait_sparse_completion_rate_limit_async(task, sparse_request, timeout: float = 600) -> bool:
+        if task.request_limiter is None:
+            return True
+
+        import asyncio
+
+        estimated_tokens = task.sparse_completion_request_tokens(sparse_request)
+        wait_started = time.time()
+        while True:
+            if Base.work_status == Base.STATUS.STOPING or not Base.is_task_session_active(
+                getattr(task, "task_session_id", Base.current_task_session())
+            ):
+                return False
+            if task.request_limiter.check_limiter(estimated_tokens):
+                return True
+            if time.time() - wait_started > timeout:
+                return False
+            await asyncio.sleep(0.1)
 
     def _process_async_result(self, result):
         """处理异步任务结果"""
@@ -990,6 +1070,9 @@ class TaskExecutor(Base):
                     task.set_source_context_items(source_context)  # 传入原文上下文（用于上下文增强）
                     task.set_character_recall_items(
                         *self._build_character_recall_window(file_path, chunk)
+                    )
+                    task.set_sparse_completion_context_items(
+                        *self._build_sparse_completion_context_window(file_path, chunk)
                     )
                     if getattr(self.config, "translation_consistency_enhancement", False):
                         task.set_consistency_context_provider(self.get_translation_consistency_state_snapshot)

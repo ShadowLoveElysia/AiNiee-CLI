@@ -69,6 +69,8 @@ DEFAULT_CONFIG = {
     "chunk_soft_limit_extra_lines": 10,
     "line_split_optimization_mode": "off",
     "retry_split_min_lines": 15,
+    "sparse_completion_previous_lines": 15,
+    "sparse_completion_lookahead_lines": 8,
     "tokens_limit": 1500,
     "pre_line_counts": 3,
     "output_filename_suffix": "",
@@ -709,6 +711,6 @@ DEFAULT_CONFIG = {
     "api_settings": {"translate": "sakura", "polish": "sakura"},
     "label_input_path": "",
     "interactive_mode": True,
-    "translation_prompt_selection": {},
-    "polishing_prompt_selection": {},
+    "translation_prompt_selection": {"last_selected_id": 100},
+    "polishing_prompt_selection": {"last_selected_id": 10001},
 }

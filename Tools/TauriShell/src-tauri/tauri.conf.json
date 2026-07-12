@@ -36,6 +36,7 @@
       "../../../StevExtraction": "ainiee-runtime/StevExtraction",
       "../../../skimage": "ainiee-runtime/skimage",
       "../../../Tools/__init__.py": "ainiee-runtime/Tools/__init__.py",
+      "../../../Tools/MCPServer": "ainiee-runtime/Tools/MCPServer",
       "../../../Tools/WebServer/__init__.py": "ainiee-runtime/Tools/WebServer/__init__.py",
       "../../../Tools/WebServer/web_server.py": "ainiee-runtime/Tools/WebServer/web_server.py",
       "../../../Tools/WebServer/dist": "ainiee-runtime/Tools/WebServer/dist",
