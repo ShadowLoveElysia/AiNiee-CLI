@@ -230,6 +230,15 @@ class ProofreadSuggestionTUI:
         self.index = min(max(self.index, 0), len(suggestions) - 1)
         current = suggestions[self.index]
 
+        if current.status == ProofreadSuggestionStatus.COMPLETED and action in {
+            "accept",
+            "reject",
+            "ignore",
+            "restore",
+        }:
+            self.last_message = self._tr("proofread_suggestion_status_completed")
+            return
+
         if action == "prev":
             self.index = max(0, self.index - 1)
         elif action == "next":
@@ -341,7 +350,11 @@ class ProofreadSuggestionTUI:
         content.add_row(report_table)
         content.add_row(Text("─"))
         content.add_row(table)
-        content.add_row(self._build_footer())
+        content.add_row(
+            self._build_footer(
+                include_item_actions=suggestion.status != ProofreadSuggestionStatus.COMPLETED
+            )
+        )
         return Panel(content, title=f"{self._tr('proofread_suggestion_title')} {self._progress_text(store, suggestion)}")
 
     def _build_report_table(self, store: ProofreadSuggestionStore) -> Table:
@@ -367,6 +380,10 @@ class ProofreadSuggestionTUI:
                 counts.get("conflict", 0),
                 len(store.suggestions),
             ),
+        )
+        table.add_row(
+            f"[bold]{self._tr('proofread_suggestion_filter_completed')}[/bold]",
+            str(counts.get("completed", 0)),
         )
         suggestion_mode = str(store.run.get("suggestion_mode", "proofread") or "proofread")
         table.add_row(

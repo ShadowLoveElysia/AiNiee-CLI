@@ -345,7 +345,7 @@ class TUIEditor:
                     new_translation = item_data['translation']
 
                     # 根据当前状态决定保存到哪个字段
-                    if cache_item.translation_status == 2:  # POLISHED
+                    if cache_item.polished_text:
                         cache_item.polished_text = new_translation
                     else:
                         cache_item.translated_text = new_translation
