@@ -38,6 +38,8 @@
 
 每条建议必须精确对应一行，只能包含一个批注目标。一个条目不得合并多行或多个目标；确有多个独立目标时，必须输出多条建议。
 
+manually_edited=true 或 allow_suggestion=false 的条目是用户已经人工编辑的 read-only context。必须阅读并利用这些条目理解人物、指代、语气、术语和情节，但不得针对它们生成任何批注建议。suggestions 中只能包含 allow_suggestion=true 的条目。
+
 annotation_target 必须逐字取自该行原文。annotation_text 只填写“注：”后面的解释正文，不得包含“注：”前缀、括号、Markdown、换行或第二个批注块。reason 必须简短说明“不批注会损失什么重要信息”，不能只写“这是文化词”或“建议补充说明”。
 
 系统采纳时会把批注确定性地组装为：当前译文 + 空格 + （注：annotation_text）。批注只能追加在整行末尾，禁止插入句中，禁止修改当前译文，禁止换行。

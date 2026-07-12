@@ -239,6 +239,7 @@ class CommandModeRunner:
             self.host.config["target_language"] = args.target_lang
         if args.output_path:
             self.host.config["label_output_path"] = args.output_path
+            self.host.config["auto_set_output_path"] = False
         if args.project_type:
             self.host.config["translation_project"] = args.project_type
 

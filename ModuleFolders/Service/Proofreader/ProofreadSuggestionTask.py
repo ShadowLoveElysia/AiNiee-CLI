@@ -50,6 +50,9 @@ class ProofreadSuggestionTask(Base):
         self.messages = [{"role": "user", "content": prompt}]
 
     def run(self) -> dict:
+        if not any(line.allow_suggestion for line in self.batch.lines):
+            return self._skip_result()
+
         if not self.messages:
             self.prepare()
 
@@ -98,7 +101,7 @@ class ProofreadSuggestionTask(Base):
             "result": ProofreadSuggestionParseResult(
                 batch_id=self.batch.batch_id,
                 batch_hash=self.batch.batch_hash,
-                closed_without_suggestions=True,
+                closed_without_suggestions=False,
                 suggestions=[],
             ),
         }

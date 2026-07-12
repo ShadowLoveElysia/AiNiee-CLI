@@ -20,6 +20,24 @@ PROOFREAD_SUGGESTION_MODES = {"proofread", "annotation"}
 ANNOTATION_ISSUE_TYPE = "annotation"
 ANNOTATION_SEVERITY = "info"
 LINE_BREAK_CHARACTERS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+INVALID_SUGGESTION_TEXTS = frozenset(
+    {
+        "<missing>",
+        "missing",
+        "<缺失>",
+        "缺失",
+        "translation",
+        "<translation>",
+        "译文",
+        "<译文>",
+        "待翻译",
+        "未翻译",
+        "n/a",
+        "na",
+        "todo",
+        "missing translation",
+    }
+)
 
 
 class ProofreadSuggestionStatus(StrEnum):
@@ -44,6 +62,8 @@ class ProofreadSuggestionLine:
     source_text: str
     current_translation: str
     line_hash: str
+    manually_edited: bool = False
+    allow_suggestion: bool = True
 
 
 @dataclass
@@ -127,6 +147,22 @@ def normalize_suggestion_text(text: Any) -> str:
     return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
+def is_actionable_suggestion_text(value: Any) -> bool:
+    text = normalize_suggestion_text(value)
+    normalized = text.casefold().strip()
+    wrappers = {
+        "<": ">",
+        "[": "]",
+        "(": ")",
+        "（": "）",
+        "【": "】",
+    }
+    while len(normalized) >= 2 and wrappers.get(normalized[0]) == normalized[-1]:
+        normalized = normalized[1:-1].strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+    return bool(normalized) and normalized not in INVALID_SUGGESTION_TEXTS
+
+
 def normalize_suggestion_mode(value: Any) -> str:
     mode = str(value or "proofread").strip().lower()
     if mode not in PROOFREAD_SUGGESTION_MODES:
@@ -196,6 +232,8 @@ def batch_hash(lines: list[ProofreadSuggestionLine]) -> str:
             "line_no": line.line_no,
             "item_id": line.item_id,
             "line_hash": line.line_hash,
+            "manually_edited": line.manually_edited,
+            "allow_suggestion": line.allow_suggestion,
         }
         for line in lines
     ]
@@ -243,6 +281,7 @@ def collect_suggestion_items(project: CacheProject) -> list[dict[str, Any]]:
     for file_path, cache_file in project.files.items():
         for item in cache_file.items:
             if item.translation_status not in {
+                TranslationStatus.UNTRANSLATED,
                 TranslationStatus.TRANSLATED,
                 TranslationStatus.POLISHED,
                 TranslationStatus.USER_PROOFREAD,
@@ -251,8 +290,9 @@ def collect_suggestion_items(project: CacheProject) -> list[dict[str, Any]]:
                 continue
             target_field = target_field_for_item(item)
             translation = translation_for_item(item, target_field)
-            if not item.source_text or not translation:
+            if not item.source_text:
                 continue
+            manually_edited = bool((item.extra or {}).get("proofread_manual_edit"))
             items.append(
                 {
                     "file_path": file_path,
@@ -260,6 +300,8 @@ def collect_suggestion_items(project: CacheProject) -> list[dict[str, Any]]:
                     "source_text": item.source_text,
                     "translation": translation,
                     "target_field": target_field,
+                    "manually_edited": manually_edited,
+                    "allow_suggestion": not manually_edited,
                 }
             )
     return items
@@ -280,6 +322,8 @@ def build_proofread_batch(items: list[dict[str, Any]], batch_index: int, batch_s
         text_index = int(item.get("text_index", 0))
         item_id = item_id_for(file_path, text_index)
         line_hash_value = line_hash(raw_source_text, raw_translation, target_field)
+        manually_edited = bool(item.get("manually_edited", False))
+        allow_suggestion = not manually_edited and bool(item.get("allow_suggestion", True))
         lines.append(
             ProofreadSuggestionLine(
                 batch_id=batch_id,
@@ -292,6 +336,8 @@ def build_proofread_batch(items: list[dict[str, Any]], batch_index: int, batch_s
                 source_text=source_text,
                 current_translation=translation,
                 line_hash=line_hash_value,
+                manually_edited=manually_edited,
+                allow_suggestion=allow_suggestion,
             )
         )
 
@@ -333,6 +379,8 @@ def build_suggestion_prompt(
             "line_hash": line.line_hash,
             "source": line.source_text,
             "current_translation": line.current_translation,
+            "manually_edited": line.manually_edited,
+            "allow_suggestion": line.allow_suggestion,
         }
         for line in batch.lines
     ]
@@ -381,20 +429,24 @@ def parse_suggestion_response(
     suggestion_mode: str = "proofread",
 ) -> ProofreadSuggestionParseResult:
     mode = normalize_suggestion_mode(suggestion_mode)
+    if isinstance(response, str) and response.strip() == "null":
+        return ProofreadSuggestionParseResult(batch.batch_id, batch.batch_hash, True, [])
+
     data = _decode_suggestion_payload(response)
 
     if data is None:
-        return ProofreadSuggestionParseResult(batch.batch_id, batch.batch_hash, True, [])
-    if isinstance(data, str) and data.strip().lower() == "null":
-        return ProofreadSuggestionParseResult(batch.batch_id, batch.batch_hash, True, [])
+        return ProofreadSuggestionParseResult(batch.batch_id, batch.batch_hash, False, [])
     if not isinstance(data, dict):
-        return ProofreadSuggestionParseResult(batch.batch_id, batch.batch_hash, True, [])
+        return ProofreadSuggestionParseResult(batch.batch_id, batch.batch_hash, False, [])
     if data.get("batch_id") != batch.batch_id or data.get("batch_hash") != batch.batch_hash:
-        return ProofreadSuggestionParseResult(batch.batch_id, batch.batch_hash, True, [])
+        return ProofreadSuggestionParseResult(batch.batch_id, batch.batch_hash, False, [])
+    raw_suggestions = data.get("suggestions")
+    if not isinstance(raw_suggestions, list) or not raw_suggestions:
+        return ProofreadSuggestionParseResult(batch.batch_id, batch.batch_hash, False, [])
 
     line_by_no = {line.line_no: line for line in batch.lines}
     suggestions: list[ProofreadSuggestion] = []
-    for raw in data.get("suggestions") or []:
+    for raw in raw_suggestions:
         if not isinstance(raw, dict):
             continue
         try:
@@ -405,6 +457,10 @@ def parse_suggestion_response(
         if line is None:
             continue
         if raw.get("item_id") != line.item_id or raw.get("line_hash") != line.line_hash:
+            continue
+        # Protection is determined exclusively from the trusted local batch. Model
+        # output cannot grant itself permission to modify a manually edited line.
+        if line.manually_edited or not line.allow_suggestion:
             continue
 
         severity = str(raw.get("severity") or "low").strip().lower()
@@ -445,7 +501,7 @@ def parse_suggestion_response(
             suggested_translation = normalize_suggestion_text(
                 raw_suggested_translation
             )
-            if not suggested_translation or contains_line_break(suggested_translation):
+            if not is_actionable_suggestion_text(suggested_translation) or contains_line_break(suggested_translation):
                 continue
             if suggested_translation == line.current_translation:
                 continue
@@ -473,7 +529,7 @@ def parse_suggestion_response(
         )
         suggestions.append(suggestion)
 
-    return ProofreadSuggestionParseResult(batch.batch_id, batch.batch_hash, len(suggestions) == 0, suggestions)
+    return ProofreadSuggestionParseResult(batch.batch_id, batch.batch_hash, False, suggestions)
 
 
 def _decode_suggestion_payload(response: Any) -> Any:
@@ -487,17 +543,10 @@ def _decode_suggestion_payload(response: Any) -> Any:
         return None
 
     stripped = _strip_markdown_fence(stripped).strip()
-    lowered = stripped.lower()
-    if lowered in {"null", "json null", "`null`"}:
-        return None
 
     candidates = [stripped]
     if stripped.startswith('"') and stripped.endswith('"'):
         candidates.append(stripped.strip('"').strip())
-
-    null_match = re.search(r"(?:^|\s)(?:json\s+)?null(?:\s|$)", stripped, re.IGNORECASE)
-    if null_match and "{" not in stripped and "[" not in stripped:
-        return None
 
     json_object = _extract_first_json_object(stripped)
     if json_object and json_object != stripped:
@@ -505,8 +554,6 @@ def _decode_suggestion_payload(response: Any) -> Any:
 
     for candidate in candidates:
         candidate = candidate.strip()
-        if candidate.lower() in {"null", "json null"}:
-            return None
         try:
             return json.loads(candidate)
         except json.JSONDecodeError:

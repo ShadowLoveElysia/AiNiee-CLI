@@ -93,6 +93,19 @@ except Exception as exc:
 
 # --- Global State & Task Management ---
 
+def resolve_task_worker_python(project_root: str, platform_name: str | None = None) -> str:
+    """Return the project virtual-environment interpreter for task workers."""
+    current_platform = str(platform_name or sys.platform).lower()
+    if current_platform == "win32":
+        executable = os.path.join(project_root, ".venv-win", "Scripts", "python.exe")
+    else:
+        executable = os.path.join(project_root, ".venv", "bin", "python")
+
+    if not os.path.isfile(executable):
+        raise FileNotFoundError(f"Task worker Python environment not found: {executable}")
+    return executable
+
+
 class TaskManager:
     """A singleton class to manage the CLI task execution state."""
     _instance = None
@@ -235,15 +248,21 @@ class TaskManager:
             self.stats["status"] = "running"
             self.push_log("Task starting with parameters from web UI...")
 
-            # Base command using corrected keys and uv runner
+            try:
+                worker_python = resolve_task_worker_python(PROJECT_ROOT)
+            except FileNotFoundError as exc:
+                self.status = "error"
+                self.stats["status"] = "error"
+                self.push_log(str(exc), "error")
+                return False
+
             cli_args = [
-                "uv",
-                "run",
+                worker_python,
                 os.path.join(PROJECT_ROOT, "ainiee_cli.py"),
-                payload["task"], # Use 'task' key
+                payload["task"],
                 payload["input_path"],
-                "-y",  # Crucial for non-interactive mode
-                "--web-mode" # Activate parsable output
+                "-y",
+                "--web-mode",
             ]
             
             # Add optional arguments based on the payload
@@ -4064,7 +4083,6 @@ def run_proofread_task():
                 context_lines=context_for(index),
                 suggestion_mode=suggestion_mode,
             )
-            task.prepare()
             return task.run()
 
         with concurrent.futures.ThreadPoolExecutor(

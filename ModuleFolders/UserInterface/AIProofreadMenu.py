@@ -267,12 +267,10 @@ class AIProofreadMenu:
                 with lock:
                     completed_tasks += 1
                     if task_result.get("skip", True):
-                        closed_batches += 1
                         return
                     total_tokens += task_result.get("prompt_tokens", 0) + task_result.get("completion_tokens", 0)
                     parsed = task_result.get("result")
                     if parsed is None:
-                        closed_batches += 1
                         return
                     store.add_batch_result(parsed)
                     if parsed.closed_without_suggestions and not parsed.suggestions:
@@ -292,7 +290,6 @@ class AIProofreadMenu:
                 context_lines=build_context_for_batch(index),
                 suggestion_mode=suggestion_mode,
             )
-            task.prepare()
             tasks_list.append(task)
 
         console.print(f"[blue]{self._tr('proofread_suggestion_generating_batches').format(len(batches))}[/blue]")

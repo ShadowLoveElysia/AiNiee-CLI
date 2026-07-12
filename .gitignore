@@ -68,6 +68,11 @@ Tools/TauriShell/icons/
 .codex
 /.venv
 /tests
+!/tests/
+/tests/*
+!/tests/test_proofread_suggestions.py
+!/tests/test_web_task_worker_runtime.py
+!/tests/test_manga_cli_runner.py
 /Resource/Models/MangaCore
 /tmp
 /Resource/rules_profiles
@@ -78,3 +83,4 @@ Resource/queue_operations.log
 /自动化产物
 /.superpowers
 /Docs/superpowers
+/tests
