@@ -83,12 +83,23 @@ class ProofreadSuggestionTask(Base):
                 self.batch,
                 suggestion_mode=self.suggestion_mode,
             )
-            return {
+            result = {
                 "skip": False,
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "result": parsed,
             }
+            if bool(getattr(self.config, "proofread_save_raw_responses", False)):
+                result["raw_response"] = {
+                    "batch_id": self.batch.batch_id,
+                    "batch_hash": self.batch.batch_hash,
+                    "suggestion_mode": self.suggestion_mode,
+                    "response_think": response_think,
+                    "response_content": response_content,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                }
+            return result
         except Exception as exc:
             self.print(f"[{Base.tra('proofread_suggestion_error_prefix')}] {exc}")
             return self._skip_result()

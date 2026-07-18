@@ -42,11 +42,23 @@ class ProofreadReviewService:
         self.project = project
         self.save_project = save_project or (lambda: None)
 
-    def accept(self, suggestion_id: str, client: str = "tui") -> ProofreadReviewActionResult:
+    def accept(
+        self,
+        suggestion_id: str,
+        client: str = "tui",
+        allow_manual_edit_override: bool = False,
+    ) -> ProofreadReviewActionResult:
         suggestion = self._require_suggestion(suggestion_id)
         if suggestion.status != ProofreadSuggestionStatus.PENDING:
             return ProofreadReviewActionResult(
                 False, suggestion_id, suggestion.status, "suggestion is not pending"
+            )
+        if self.requires_manual_edit_confirmation(suggestion_id) and not allow_manual_edit_override:
+            return ProofreadReviewActionResult(
+                False,
+                suggestion_id,
+                suggestion.status,
+                "manual edit confirmation required",
             )
         previous_suggestion = copy.deepcopy(suggestion)
         cache_item = find_cache_item(self.project, suggestion.file_path, suggestion.text_index)
@@ -105,6 +117,7 @@ class ProofreadReviewService:
     def reject(self, suggestion_id: str, client: str = "tui") -> ProofreadReviewActionResult:
         suggestion = self._require_suggestion(suggestion_id)
         if suggestion.status in {
+            ProofreadSuggestionStatus.DISCARDED,
             ProofreadSuggestionStatus.ACCEPTED,
             ProofreadSuggestionStatus.STALE,
             ProofreadSuggestionStatus.COMPLETED,
@@ -117,6 +130,7 @@ class ProofreadReviewService:
     def ignore(self, suggestion_id: str, client: str = "tui") -> ProofreadReviewActionResult:
         suggestion = self._require_suggestion(suggestion_id)
         if suggestion.status in {
+            ProofreadSuggestionStatus.DISCARDED,
             ProofreadSuggestionStatus.ACCEPTED,
             ProofreadSuggestionStatus.STALE,
             ProofreadSuggestionStatus.COMPLETED,
@@ -138,6 +152,55 @@ class ProofreadReviewService:
         if conflict is not None:
             return conflict
         return self._change_status(suggestion_id, ProofreadSuggestionStatus.PENDING, "restored", client)
+
+    def requires_manual_edit_confirmation(self, suggestion_id: str) -> bool:
+        suggestion = self._require_suggestion(suggestion_id)
+        return (
+            suggestion.status == ProofreadSuggestionStatus.PENDING
+            and bool(suggestion.extra.get("was_discarded"))
+        )
+
+    def delete(self, suggestion_id: str, client: str = "tui") -> ProofreadReviewActionResult:
+        suggestion = self._require_suggestion(suggestion_id)
+        if self.store.is_archive:
+            return ProofreadReviewActionResult(
+                False, suggestion_id, suggestion.status, "archived report is read-only"
+            )
+        if suggestion.status == ProofreadSuggestionStatus.ACCEPTED:
+            return ProofreadReviewActionResult(
+                False,
+                suggestion_id,
+                suggestion.status,
+                "accepted suggestion must be undone",
+            )
+
+        previous_suggestions = copy.deepcopy(self.store.suggestions)
+        previous_history = copy.deepcopy(self.store.review_history)
+        previous_review_state = copy.deepcopy(self.store.review_state)
+        self.store.suggestions = [
+            item for item in self.store.suggestions if item.suggestion_id != suggestion_id
+        ]
+        self.store.review_history = [
+            entry
+            for entry in self.store.review_history
+            if entry.get("suggestion_id") != suggestion_id
+        ]
+        for entry in self.store.review_history:
+            related_statuses = entry.get("related_statuses")
+            if isinstance(related_statuses, dict):
+                related_statuses.pop(suggestion_id, None)
+        if self.store.review_state.get("current_suggestion_id") == suggestion_id:
+            self.store.review_state["current_suggestion_id"] = ""
+        self.store.review_state["updated_at"] = self._now()
+        self.store.review_state["updated_by"] = client
+        try:
+            self.store.save()
+        except Exception:
+            self.store.suggestions = previous_suggestions
+            self.store.review_history = previous_history
+            self.store.review_state = previous_review_state
+            raise
+        return ProofreadReviewActionResult(True, suggestion_id, suggestion.status)
 
     def undo_last(self, client: str = "tui") -> ProofreadReviewActionResult:
         entry = next(

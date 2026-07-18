@@ -82,6 +82,7 @@ DEFAULT_CONFIG = {
     "proofread_report_mode": "archive",
     "proofread_archive_limit": 20,
     "proofread_suggestion_mode": "proofread",
+    "proofread_save_raw_responses": False,
     "cache_backup_limit": 10,
     "cache_save_interval": 8,
     "enable_cache_backup": True,

@@ -183,6 +183,7 @@ class AIProofreadMenu:
 
         from ModuleFolders.Infrastructure.RequestLimiter.RequestLimiter import RequestLimiter
         from ModuleFolders.Service.Proofreader import (
+            ProofreadRawResponseStore,
             ProofreadSuggestionStore,
             build_proofread_batch,
             collect_suggestion_items,
@@ -227,6 +228,11 @@ class AIProofreadMenu:
             self.config.get("proofread_suggestion_mode", "proofread")
         )
         store = ProofreadSuggestionStore(project_path)
+        raw_response_store = (
+            ProofreadRawResponseStore(project_path)
+            if bool(self.config.get("proofread_save_raw_responses", False))
+            else None
+        )
         try:
             archive_limit = max(0, int(self.config.get("proofread_archive_limit", 20)))
         except (TypeError, ValueError):
@@ -269,6 +275,16 @@ class AIProofreadMenu:
                     if task_result.get("skip", True):
                         return
                     total_tokens += task_result.get("prompt_tokens", 0) + task_result.get("completion_tokens", 0)
+                    raw_response = task_result.get("raw_response")
+                    if raw_response_store is not None and isinstance(raw_response, dict):
+                        raw_response_store.append(
+                            {
+                                **raw_response,
+                                "run_id": store.run.get("run_id", ""),
+                                "provider": store.run.get("provider", ""),
+                                "model": store.run.get("model", ""),
+                            }
+                        )
                     parsed = task_result.get("result")
                     if parsed is None:
                         return
@@ -357,9 +373,7 @@ class AIProofreadMenu:
             return
 
         tui = ProofreadSuggestionTUI(console, self.i18n)
-        manager = CacheManager()
-        manager.project = project
-        manager.save_to_file_require_path = project_path
+        manager = self._prepare_proofread_cache_manager(project_path, project)
         review_result = tui.run(store, project, save_project=manager.save_to_file)
         if review_result.accepted > 0:
             console.print(f"[green]{self._tr('proofread_suggestion_saved_cache').format(review_result.accepted)}[/green]")
@@ -522,9 +536,7 @@ class AIProofreadMenu:
         cache_file = os.path.join(project_path, "cache", "AinieeCacheData.json")
         project = CacheManager.read_from_file(cache_file)
         tui = ProofreadSuggestionTUI(console, self.i18n)
-        manager = CacheManager()
-        manager.project = project
-        manager.save_to_file_require_path = project_path
+        manager = self._prepare_proofread_cache_manager(project_path, project)
         review_result = tui.run(
             store,
             project,
@@ -537,6 +549,12 @@ class AIProofreadMenu:
             f"[cyan]{self._tr('proofread_suggestion_review_summary').format(review_result.accepted, review_result.rejected, review_result.ignored, review_result.conflicts)}[/cyan]"
         )
         self._press_enter()
+
+    def _prepare_proofread_cache_manager(self, project_path: str, project):
+        manager = self.host.cache_manager
+        manager.load_from_project(project)
+        manager.save_to_file_require_path = project_path
+        return manager
 
     def _execute_proofread(self, project_path: str):
         """执行校对"""
@@ -1013,6 +1031,9 @@ class AIProofreadMenu:
             suggestion_mode = str(
                 self.config.get("proofread_suggestion_mode", "proofread") or "proofread"
             )
+            save_raw_responses = bool(
+                self.config.get("proofread_save_raw_responses", False)
+            )
 
             table = Table(show_header=False, box=None)
             table.add_row("[cyan]1.[/]", f"{self._tr('setting_proofread_context_lines')}: {context_lines}")
@@ -1028,12 +1049,17 @@ class AIProofreadMenu:
                 f"{self._tr('setting_proofread_suggestion_mode')}: "
                 f"{self._tr(f'setting_proofread_suggestion_mode_{suggestion_mode}')}",
             )
+            table.add_row(
+                "[cyan]7.[/]",
+                f"{self._tr('setting_proofread_save_raw_responses')}: "
+                f"{self._tr('label_enabled') if save_raw_responses else self._tr('banner_off')}",
+            )
             console.print(table)
             console.print(f"\n[dim]0. {self._tr('menu_back')}[/dim]")
 
             choice = IntPrompt.ask(
                 self._tr("prompt_select"),
-                choices=["0", "1", "2", "3", "4", "5", "6"],
+                choices=["0", "1", "2", "3", "4", "5", "6", "7"],
                 show_choices=False,
             )
 
@@ -1062,10 +1088,32 @@ class AIProofreadMenu:
                 )
                 self.config["proofread_archive_limit"] = min(max(new_val, 0), 999)
             elif choice == 6:
-                self.config["proofread_suggestion_mode"] = Prompt.ask(
-                    self._tr("setting_proofread_suggestion_mode"),
-                    choices=["proofread", "annotation"],
-                    default=suggestion_mode,
+                self.config["proofread_suggestion_mode"] = self._prompt_proofread_suggestion_mode(
+                    suggestion_mode
                 )
+            elif choice == 7:
+                console.print(
+                    f"[yellow]{self._tr('setting_proofread_save_raw_responses_desc')}[/yellow]"
+                )
+                self.config["proofread_save_raw_responses"] = not save_raw_responses
 
             self.host.save_config()
+
+    def _prompt_proofread_suggestion_mode(self, current: str) -> str:
+        modes = ("proofread", "annotation")
+        normalized_current = current if current in modes else "proofread"
+        table = Table(show_header=False, show_lines=False)
+        for index, mode in enumerate(modes, 1):
+            marker = "[green]●[/green]" if mode == normalized_current else " "
+            table.add_row(
+                f"[cyan]{index}.[/cyan]",
+                self._tr(f"setting_proofread_suggestion_mode_{mode}"),
+                marker,
+            )
+        console.print(table)
+        choice = IntPrompt.ask(
+            self._tr("prompt_select"),
+            choices=["1", "2"],
+            show_choices=False,
+        )
+        return modes[choice - 1]

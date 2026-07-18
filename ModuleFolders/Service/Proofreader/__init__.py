@@ -17,4 +17,5 @@ from .ProofreadSuggestion import (
     parse_suggestion_response,
 )
 from .ProofreadSuggestionStore import ProofreadSuggestionStore
+from .ProofreadRawResponseStore import ProofreadRawResponseStore
 from .ProofreadReviewService import ProofreadReviewActionResult, ProofreadReviewService

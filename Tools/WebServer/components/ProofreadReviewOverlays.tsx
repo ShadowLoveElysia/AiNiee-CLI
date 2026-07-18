@@ -8,10 +8,11 @@ import {
   Clock3,
   FileCheck2,
   RotateCcw,
+  Trash2,
   X,
 } from 'lucide-react';
 
-export type ProofreadSuggestionStatus = 'pending' | 'accepted' | 'rejected' | 'ignored' | 'conflict' | 'stale' | 'completed';
+export type ProofreadSuggestionStatus = 'pending' | 'discarded' | 'accepted' | 'rejected' | 'ignored' | 'conflict' | 'stale' | 'completed';
 
 export interface WebProofreadSuggestion {
   suggestion_id: string;
@@ -30,6 +31,8 @@ export interface WebProofreadSuggestion {
   confidence: number;
   status: ProofreadSuggestionStatus;
   undo_available?: boolean;
+  discard_reason?: string;
+  was_discarded?: boolean;
 }
 
 export interface ProofreadLineGroup {
@@ -58,11 +61,11 @@ export interface ProofreadSummary {
 type Translator = (key: string, ...args: any[]) => string;
 
 const markerFor = (status: ProofreadSuggestionStatus) => ({
-  pending: '#', accepted: '*', rejected: '-', ignored: '~', conflict: '!', stale: 'x', completed: '✓',
+  pending: '#', discarded: '×', accepted: '*', rejected: '-', ignored: '~', conflict: '!', stale: 'x', completed: '✓',
 }[status]);
 
 const toneFor = (status: ProofreadSuggestionStatus) => ({
-  pending: 'text-amber-300', accepted: 'text-emerald-300', rejected: 'text-slate-500',
+  pending: 'text-amber-300', discarded: 'text-rose-300', accepted: 'text-emerald-300', rejected: 'text-slate-500',
   ignored: 'text-cyan-300', conflict: 'text-rose-300', stale: 'text-slate-600', completed: 'text-emerald-400',
 }[status]);
 
@@ -133,7 +136,7 @@ export const ProofreadReportPanel: React.FC<ReportPanelProps> = ({
           )}
         </div>
         <div className="mt-2 flex gap-1 overflow-x-auto pb-0.5">
-          {['pending', 'ignored', 'conflict', 'accepted', 'rejected', 'completed', 'all'].map((value) => (
+          {['pending', 'discarded', 'ignored', 'conflict', 'accepted', 'rejected', 'completed', 'all'].map((value) => (
             <button type="button" key={value} onClick={() => onFilter(value)} className={`shrink-0 rounded px-2 py-1 text-[9px] font-semibold ${filter === value ? 'bg-primary text-slate-950' : 'bg-slate-900 text-slate-500 hover:text-white'}`}>{t(`cache_editor_proofread_filter_${value}`)}</button>
           ))}
         </div>
@@ -202,9 +205,11 @@ interface InlineProps {
   onReject: () => void;
   onIgnore: () => void;
   onRestore: () => void;
+  onDelete: () => void;
+  readOnly: boolean;
 }
 
-export const ProofreadInlineSuggestion: React.FC<InlineProps> = ({ t, suggestion, index, count, busy, onPrevious, onNext, onAccept, onReject, onIgnore, onRestore }) => (
+export const ProofreadInlineSuggestion: React.FC<InlineProps> = ({ t, suggestion, index, count, busy, onPrevious, onNext, onAccept, onReject, onIgnore, onRestore, onDelete, readOnly }) => (
   <div data-proofread-layout="inline-suggestion" onClick={(event) => event.stopPropagation()} className="mt-3 rounded-lg border border-amber-300/20 bg-amber-300/[0.045] p-3 text-xs">
     <div className="flex items-center justify-between gap-3">
       <div className="flex min-w-0 items-center gap-2"><span className={`text-sm font-black ${toneFor(suggestion.status)}`}>{markerFor(suggestion.status)}</span><span className="truncate font-semibold text-slate-200">{t('cache_editor_proofread_inline_title')}</span><span className="text-[9px] text-slate-600">{suggestion.severity} · {suggestion.issue_type} · {Number(suggestion.confidence || 0).toFixed(2)}</span></div>
@@ -214,6 +219,11 @@ export const ProofreadInlineSuggestion: React.FC<InlineProps> = ({ t, suggestion
     <div className="mt-1 whitespace-pre-wrap rounded-md bg-slate-950/55 p-2.5 leading-relaxed text-emerald-200">{suggestion.suggested_translation}</div>
     <div className="mt-2 text-[9px] font-semibold uppercase text-slate-600">{t('cache_editor_proofread_reason')}</div>
     <div className="mt-1 leading-relaxed text-slate-400">{suggestion.reason}</div>
+    {suggestion.discard_reason === 'manual_edit' && (
+      <div className="mt-2 rounded-md border border-rose-300/20 bg-rose-300/10 p-2.5 leading-relaxed text-rose-200">
+        {t('cache_editor_proofread_discard_reason_manual_edit')}
+      </div>
+    )}
     <div className="mt-3 flex flex-wrap justify-end gap-2">
       {suggestion.status === 'pending' || suggestion.status === 'conflict' ? <>
         <button type="button" onClick={onAccept} disabled={busy || suggestion.status === 'conflict'} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-emerald-500 px-3 text-[11px] font-semibold text-slate-950 disabled:opacity-40"><Check size={13} />{t('cache_editor_proofread_accept')}</button>
@@ -222,6 +232,9 @@ export const ProofreadInlineSuggestion: React.FC<InlineProps> = ({ t, suggestion
       </> : suggestion.status === 'completed' ? (
         <span className="inline-flex h-8 items-center gap-1.5 rounded-md border border-emerald-400/20 bg-emerald-400/10 px-3 text-[11px] font-semibold text-emerald-300"><Check size={13} />{t('cache_editor_proofread_completed_manual')}</span>
       ) : <button type="button" onClick={onRestore} disabled={busy || suggestion.status === 'accepted'} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-3 text-[11px] font-semibold text-slate-300 disabled:opacity-40"><RotateCcw size={13} />{t('cache_editor_proofread_restore')}</button>}
+      {!readOnly && (
+        <button type="button" onClick={onDelete} disabled={busy || suggestion.status === 'accepted'} className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-rose-300/25 bg-rose-300/10 px-3 text-[11px] font-semibold text-rose-200 transition-colors hover:bg-rose-300/20 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 size={13} />{t('cache_editor_proofread_delete')}</button>
+      )}
     </div>
   </div>
 );

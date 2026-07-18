@@ -241,11 +241,12 @@ export const CacheEditor: React.FC = () => {
     const statusPriority: Record<ProofreadSuggestionStatus, number> = {
       conflict: 7,
       pending: 6,
-      accepted: 5,
-      ignored: 4,
-      rejected: 3,
-      completed: 2,
-      stale: 1,
+      discarded: 5,
+      accepted: 4,
+      ignored: 3,
+      rejected: 2,
+      completed: 1,
+      stale: 0,
     };
     return Array.from(grouped.entries()).map(([itemId, items]) => {
       const displayStatus = [...items].sort(
@@ -379,7 +380,7 @@ export const CacheEditor: React.FC = () => {
 
   const runProofreadAction = async (
     suggestionId: string,
-    action: 'accept' | 'reject' | 'ignore' | 'restore'
+    action: 'accept' | 'reject' | 'ignore' | 'restore' | 'delete'
   ) => {
     const previousFilter = proofreadFilter;
     const previousSuggestion = proofreadSuggestions.find(
@@ -388,6 +389,12 @@ export const CacheEditor: React.FC = () => {
     const previousGroupIndex = previousSuggestion
       ? visibleProofreadGroups.findIndex((group) => group.item_id === previousSuggestion.item_id)
       : currentProofreadIndex;
+    let allowManualEditOverride = false;
+    if (action === 'accept' && previousSuggestion?.was_discarded) {
+      allowManualEditOverride = window.confirm(t('cache_editor_proofread_confirm_manual_edit_accept'));
+      if (!allowManualEditOverride) return;
+    }
+    if (action === 'delete' && !window.confirm(t('cache_editor_proofread_confirm_delete'))) return;
     setProofreadActionBusy(true);
     try {
       const response = await fetch(`/api/proofread/suggestions/${suggestionId}/${action}`, {
@@ -396,6 +403,7 @@ export const CacheEditor: React.FC = () => {
         body: JSON.stringify({
           project_path: projectPath,
           report_file: reportQueryFile() || null,
+          allow_manual_edit_override: allowManualEditOverride,
         }),
       });
       const data = await response.json();
@@ -1802,6 +1810,8 @@ export const CacheEditor: React.FC = () => {
                               onReject={() => runProofreadAction(activeSuggestion.suggestion_id, 'reject')}
                               onIgnore={() => runProofreadAction(activeSuggestion.suggestion_id, 'ignore')}
                               onRestore={() => runProofreadAction(activeSuggestion.suggestion_id, 'restore')}
+                              onDelete={() => runProofreadAction(activeSuggestion.suggestion_id, 'delete')}
+                              readOnly={Boolean(proofreadReports.find((report) => report.file === activeProofreadReport)?.is_archive)}
                             />
                           )}
                         </>

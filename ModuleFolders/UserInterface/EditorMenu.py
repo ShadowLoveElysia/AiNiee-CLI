@@ -63,7 +63,7 @@ class EditorMenu:
             table.add_row("[cyan]1.[/]", self.i18n.get("menu_editor_open_current"))
             table.add_row("[cyan]2.[/]", self.i18n.get("menu_editor_input_path"))
             table.add_row("[cyan]3.[/]", self.i18n.get("menu_editor_scan_projects"))
-            table.add_row("[cyan]4.[/]", self.i18n.get("menu_ai_proofread") or "AI自主校对")
+            table.add_row("[cyan]4.[/]", self.i18n.get("menu_ai_proofread") or "AI辅助校对")
             table.add_row("[cyan]5.[/]", self.i18n.get("menu_view_proofread_report") or "查看校对报告")
             console.print(table)
             console.print(f"\n[dim]0. {self.i18n.get('menu_back') or 'Back'}[/dim]")

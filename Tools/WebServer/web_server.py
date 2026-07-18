@@ -3113,6 +3113,7 @@ class ProofreadStartRequest(BaseModel):
 class ProofreadSuggestionActionRequest(BaseModel):
     project_path: str
     report_file: Optional[str] = None
+    allow_manual_edit_override: bool = False
 
 class ProofreadReviewStateRequest(BaseModel):
     project_path: str
@@ -3662,15 +3663,22 @@ def _run_proofread_review_action(
         save_project=lambda: _save_loaded_cache(output_path),
     )
     actions = {
-        "accept": service.accept,
         "reject": service.reject,
         "ignore": service.ignore,
         "restore": service.restore,
+        "delete": service.delete,
     }
-    if action not in actions:
+    if action != "accept" and action not in actions:
         raise HTTPException(status_code=400, detail="Unsupported proofread action")
     try:
-        result = actions[action](suggestion_id, client="web")
+        if action == "accept":
+            result = service.accept(
+                suggestion_id,
+                client="web",
+                allow_manual_edit_override=request.allow_manual_edit_override,
+            )
+        else:
+            result = actions[action](suggestion_id, client="web")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     status_code = 200 if result.success else 409
@@ -4013,6 +4021,7 @@ def run_proofread_task():
         from ModuleFolders.Infrastructure.TaskConfig.TaskConfig import TaskConfig
         from ModuleFolders.Infrastructure.TaskConfig.TaskType import TaskType
         from ModuleFolders.Service.Proofreader import (
+            ProofreadRawResponseStore,
             ProofreadSuggestionStore,
             build_proofread_batch,
             collect_suggestion_items,
@@ -4025,6 +4034,11 @@ def run_proofread_task():
         output_path = str(_proofread_state.get("output_path") or "")
         store = ProofreadSuggestionStore(output_path)
         store.load()
+        raw_response_store = (
+            ProofreadRawResponseStore(output_path)
+            if bool(config.get("proofread_save_raw_responses", False))
+            else None
+        )
         suggestion_mode = normalize_suggestion_mode(
             _proofread_state.get("suggestion_mode")
             or store.run.get("suggestion_mode", "proofread")
@@ -4098,6 +4112,19 @@ def run_proofread_task():
                     parsed = result.get("result")
                     if not result.get("skip", True) and parsed is not None:
                         store.add_batch_result(parsed)
+                    raw_response = result.get("raw_response")
+                    if raw_response_store is not None and isinstance(raw_response, dict):
+                        try:
+                            raw_response_store.append(
+                                {
+                                    **raw_response,
+                                    "run_id": store.run.get("run_id", ""),
+                                    "provider": store.run.get("provider", ""),
+                                    "model": store.run.get("model", ""),
+                                }
+                            )
+                        except Exception as exc:
+                            print(f"Failed to save proofread raw response: {exc}")
                     _proofread_state["progress"] += 1
                     _proofread_state["tokens_used"] += int(result.get("prompt_tokens", 0) or 0)
                     _proofread_state["tokens_used"] += int(result.get("completion_tokens", 0) or 0)

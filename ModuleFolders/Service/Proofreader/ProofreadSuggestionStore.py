@@ -254,7 +254,7 @@ class ProofreadSuggestionStore:
                     for item in data.get("suggestions", [])
                     if isinstance(item, dict)
                 }
-                if statuses.intersection({"pending", "conflict"}) or data.get("review_history"):
+                if statuses.intersection({"pending", "discarded", "conflict"}) or data.get("review_history"):
                     continue
                 path.unlink()
             except (OSError, ValueError, TypeError, json.JSONDecodeError):

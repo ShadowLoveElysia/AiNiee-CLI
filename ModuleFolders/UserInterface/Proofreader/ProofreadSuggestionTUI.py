@@ -12,6 +12,7 @@ from typing import Callable
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
+from rich.prompt import Confirm
 from rich.table import Table
 from rich.text import Text
 
@@ -43,6 +44,7 @@ PROOFREAD_SUGGESTION_KEYMAP = {
     "g": "goto",
     "u": "undo",
     "r": "restore",
+    "del": "delete",
     "?": "help",
     "q": "quit",
 }
@@ -84,6 +86,7 @@ class ProofreadSuggestionTUI:
     PAGE_SIZE = 10
     FILTERS = [
         ProofreadSuggestionStatus.PENDING,
+        ProofreadSuggestionStatus.DISCARDED,
         ProofreadSuggestionStatus.IGNORED,
         ProofreadSuggestionStatus.CONFLICT,
         ProofreadSuggestionStatus.ACCEPTED,
@@ -158,6 +161,13 @@ class ProofreadSuggestionTUI:
                         listener.clear()
                         listener.start()
                         live.start(refresh=True)
+                    elif self._action_requires_blocking_prompt(action, store):
+                        listener.stop()
+                        live.stop()
+                        self._handle_action(action, store, project, result)
+                        listener.clear()
+                        listener.start()
+                        live.start(refresh=True)
                     else:
                         self._handle_action(action, store, project, result)
                     live.update(self._render(store))
@@ -173,7 +183,7 @@ class ProofreadSuggestionTUI:
             self.console.print(self._render(store))
             action = Prompt.ask(
                 self._tr("proofread_suggestion_action_prompt"),
-                choices=["a", "x", "i", "n", "p", "g", "f", "u", "r", "q"],
+                choices=["a", "x", "i", "n", "p", "g", "f", "u", "r", "d", "q"],
                 default="n",
             )
             mapped = {
@@ -186,6 +196,7 @@ class ProofreadSuggestionTUI:
                 "f": "filter",
                 "u": "undo",
                 "r": "restore",
+                "d": "delete",
                 "q": "quit",
             }[action]
             if mapped == "quit":
@@ -195,6 +206,20 @@ class ProofreadSuggestionTUI:
             else:
                 self._handle_action(mapped, store, project, result)
         self._persist_review_state(store)
+
+    def _action_requires_blocking_prompt(
+        self,
+        action: str | None,
+        store: ProofreadSuggestionStore,
+    ) -> bool:
+        suggestions = self._visible_suggestions(store)
+        if not suggestions:
+            return False
+        current = suggestions[min(max(self.index, 0), len(suggestions) - 1)]
+        service = self.review_service
+        if action == "accept" and service is not None:
+            return service.requires_manual_edit_confirmation(current.suggestion_id)
+        return action == "delete" and not store.is_archive
 
     def _handle_action(
         self,
@@ -238,6 +263,13 @@ class ProofreadSuggestionTUI:
         }:
             self.last_message = self._tr("proofread_suggestion_status_completed")
             return
+        if current.status == ProofreadSuggestionStatus.DISCARDED and action in {
+            "accept",
+            "reject",
+            "ignore",
+        }:
+            self.last_message = self._tr("proofread_suggestion_msg_discarded_restore_first")
+            return
 
         if action == "prev":
             self.index = max(0, self.index - 1)
@@ -250,7 +282,20 @@ class ProofreadSuggestionTUI:
         elif action == "toggle_expand":
             self.expanded = not self.expanded
         elif action == "accept":
-            apply_result = service.accept(current.suggestion_id, client="tui")
+            allow_manual_edit_override = False
+            if service.requires_manual_edit_confirmation(current.suggestion_id):
+                allow_manual_edit_override = Confirm.ask(
+                    self._tr("proofread_suggestion_confirm_manual_edit_accept"),
+                    default=False,
+                )
+                if not allow_manual_edit_override:
+                    self.last_message = self._tr("proofread_suggestion_msg_manual_edit_accept_cancelled")
+                    return
+            apply_result = service.accept(
+                current.suggestion_id,
+                client="tui",
+                allow_manual_edit_override=allow_manual_edit_override,
+            )
             if apply_result.success:
                 result.accepted += 1
                 self.last_message = self._tr("proofread_suggestion_msg_accepted")
@@ -276,6 +321,23 @@ class ProofreadSuggestionTUI:
                 self._tr("proofread_suggestion_msg_restored")
                 if action_result.success
                 else self._tr("proofread_suggestion_msg_restore_failed").format(action_result.message)
+            )
+            self._advance_after_status_change(store)
+        elif action == "delete":
+            if store.is_archive:
+                self.last_message = self._tr("proofread_suggestion_msg_archive_read_only")
+                return
+            if not Confirm.ask(
+                self._tr("proofread_suggestion_confirm_delete"),
+                default=False,
+            ):
+                self.last_message = self._tr("proofread_suggestion_msg_delete_cancelled")
+                return
+            action_result = service.delete(current.suggestion_id, client="tui")
+            self.last_message = (
+                self._tr("proofread_suggestion_msg_deleted")
+                if action_result.success
+                else self._tr("proofread_suggestion_msg_delete_failed").format(action_result.message)
             )
             self._advance_after_status_change(store)
 
@@ -307,7 +369,12 @@ class ProofreadSuggestionTUI:
             content.add_row(self._build_report_table(store))
             content.add_row(Text("─"))
             content.add_row(f"[yellow]{self._tr('proofread_suggestion_no_pending')}[/yellow]")
-            content.add_row(self._build_footer(include_item_actions=False))
+            content.add_row(
+                self._build_footer(
+                    include_review_actions=False,
+                    include_delete=False,
+                )
+            )
             template = self._tr("proofread_suggestion_progress_value")
             progress = template.format(0, 0, 0, len(store.suggestions)) if "{" in template else f"0/{len(store.suggestions)}"
             return Panel(content, title=f"{self._tr('proofread_suggestion_title')} {progress}")
@@ -321,6 +388,11 @@ class ProofreadSuggestionTUI:
             f"[bold]{self._tr('proofread_suggestion_label_status')}[/bold]",
             self._status_text(suggestion),
         )
+        if suggestion.extra.get("discard_reason") == "manual_edit":
+            table.add_row(
+                f"[bold red]{self._tr('proofread_suggestion_label_discard_reason')}[/bold red]",
+                self._tr("proofread_suggestion_discard_reason_manual_edit"),
+            )
         table.add_row(f"[bold]{self._tr('proofread_suggestion_label_source')}[/bold]", self._clip(suggestion.source_text, text_limit))
         table.add_row(f"[bold cyan]{self._tr('proofread_suggestion_label_current_translation')}[/bold cyan]", self._clip(suggestion.current_translation, text_limit))
         table.add_row(f"[bold green]{self._tr('proofread_suggestion_label_suggested_translation')}[/bold green]", self._clip(suggestion.suggested_translation, text_limit))
@@ -352,7 +424,14 @@ class ProofreadSuggestionTUI:
         content.add_row(table)
         content.add_row(
             self._build_footer(
-                include_item_actions=suggestion.status != ProofreadSuggestionStatus.COMPLETED
+                include_review_actions=suggestion.status in {
+                    ProofreadSuggestionStatus.PENDING,
+                    ProofreadSuggestionStatus.CONFLICT,
+                },
+                include_delete=(
+                    not store.is_archive
+                    and suggestion.status != ProofreadSuggestionStatus.ACCEPTED
+                ),
             )
         )
         return Panel(content, title=f"{self._tr('proofread_suggestion_title')} {self._progress_text(store, suggestion)}")
@@ -374,6 +453,7 @@ class ProofreadSuggestionTUI:
             f"[bold]{self._tr('proofread_suggestion_summary_label')}[/bold]",
             self._tr("proofread_suggestion_summary_value").format(
                 counts.get("pending", 0),
+                counts.get("discarded", 0),
                 counts.get("accepted", 0),
                 counts.get("rejected", 0),
                 counts.get("ignored", 0),
@@ -396,12 +476,18 @@ class ProofreadSuggestionTUI:
         )
         return table
 
-    def _build_footer(self, include_item_actions: bool = True) -> Text:
+    def _build_footer(
+        self,
+        include_review_actions: bool = True,
+        include_delete: bool = True,
+    ) -> Text:
         footer = Text()
-        if include_item_actions:
+        if include_review_actions:
             footer.append(f"{self._tr('proofread_suggestion_footer_accept')}  ", style="green")
             footer.append(f"{self._tr('proofread_suggestion_footer_reject')}  ", style="red")
             footer.append(f"{self._tr('proofread_suggestion_footer_ignore')}  ", style="yellow")
+        if include_delete:
+            footer.append(f"{self._tr('proofread_suggestion_footer_delete')}  ", style="red")
         footer.append(self._tr("proofread_suggestion_footer_nav"), style="dim")
         if self.last_message:
             footer.append(f"\n{self.last_message}", style="cyan")
@@ -528,11 +614,12 @@ class ProofreadSuggestionTUI:
                 status_priority = {
                     ProofreadSuggestionStatus.CONFLICT: 0,
                     ProofreadSuggestionStatus.PENDING: 1,
-                    ProofreadSuggestionStatus.IGNORED: 2,
-                    ProofreadSuggestionStatus.ACCEPTED: 3,
-                    ProofreadSuggestionStatus.REJECTED: 4,
-                    ProofreadSuggestionStatus.COMPLETED: 5,
-                    ProofreadSuggestionStatus.STALE: 6,
+                    ProofreadSuggestionStatus.DISCARDED: 2,
+                    ProofreadSuggestionStatus.IGNORED: 3,
+                    ProofreadSuggestionStatus.ACCEPTED: 4,
+                    ProofreadSuggestionStatus.REJECTED: 5,
+                    ProofreadSuggestionStatus.COMPLETED: 6,
+                    ProofreadSuggestionStatus.STALE: 7,
                 }
                 selected = min(matches, key=lambda item: status_priority.get(item.status, 99))
 
@@ -555,6 +642,7 @@ class ProofreadSuggestionTUI:
     def _status_text(self, suggestion: ProofreadSuggestion) -> str:
         markers = {
             ProofreadSuggestionStatus.PENDING: ("#", "yellow"),
+            ProofreadSuggestionStatus.DISCARDED: ("×", "red"),
             ProofreadSuggestionStatus.ACCEPTED: ("*", "green"),
             ProofreadSuggestionStatus.REJECTED: ("-", "dim"),
             ProofreadSuggestionStatus.IGNORED: ("~", "cyan"),

@@ -1031,6 +1031,16 @@ register_config(ConfigItem(
 ))
 
 register_config(ConfigItem(
+    key="proofread_save_raw_responses",
+    default=False,
+    level=ConfigLevel.ADVANCED,
+    config_type=ConfigType.BOOL,
+    i18n_key="setting_proofread_save_raw_responses",
+    i18n_desc_key="setting_proofread_save_raw_responses_desc",
+    category="advanced"
+))
+
+register_config(ConfigItem(
     key="proofread_confidence_threshold",
     default=0.7,
     level=ConfigLevel.ADVANCED,

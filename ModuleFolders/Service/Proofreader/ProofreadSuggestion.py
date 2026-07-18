@@ -42,6 +42,7 @@ INVALID_SUGGESTION_TEXTS = frozenset(
 
 class ProofreadSuggestionStatus(StrEnum):
     PENDING = "pending"
+    DISCARDED = "discarded"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     IGNORED = "ignored"
@@ -460,8 +461,7 @@ def parse_suggestion_response(
             continue
         # Protection is determined exclusively from the trusted local batch. Model
         # output cannot grant itself permission to modify a manually edited line.
-        if line.manually_edited or not line.allow_suggestion:
-            continue
+        discarded_for_manual_edit = line.manually_edited or not line.allow_suggestion
 
         severity = str(raw.get("severity") or "low").strip().lower()
         issue_type = str(raw.get("issue_type") or "translation").strip().lower()
@@ -527,6 +527,14 @@ def parse_suggestion_response(
             annotation_target=annotation_target,
             annotation_text=annotation_text,
         )
+        if discarded_for_manual_edit:
+            suggestion.status = ProofreadSuggestionStatus.DISCARDED
+            suggestion.extra.update(
+                {
+                    "discard_reason": "manual_edit",
+                    "was_discarded": True,
+                }
+            )
         suggestions.append(suggestion)
 
     return ProofreadSuggestionParseResult(batch.batch_id, batch.batch_hash, False, suggestions)
