@@ -1170,6 +1170,11 @@ export const Settings: React.FC = () => {
               <h3 className="text-sm font-semibold text-slate-300 mb-3">{t('feature_proofread_section')}</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Toggle field="enable_auto_proofread" label={t('feature_enable_auto_proofread')} />
+                <Toggle
+                  field="proofread_save_raw_responses"
+                  label={t('setting_proofread_save_raw_responses')}
+                  desc={t('setting_proofread_save_raw_responses_desc')}
+                />
                 <div className="space-y-2">
                   <label className="text-xs font-semibold text-slate-400 uppercase">{t('setting_proofread_suggestion_mode')}</label>
                   <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-700 bg-slate-900 p-1">

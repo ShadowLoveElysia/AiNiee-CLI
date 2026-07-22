@@ -192,8 +192,7 @@ class AIProofreadMenu:
         from ModuleFolders.Service.Proofreader.ProofreadSuggestionTask import ProofreadSuggestionTask
         from ModuleFolders.UserInterface.Proofreader import ProofreadSuggestionTUI
 
-        cache_path = os.path.join(project_path, "cache", "AinieeCacheData.json")
-        project = CacheManager.read_from_file(cache_path)
+        manager, project = self._load_proofread_cache_manager(project_path)
         items = collect_suggestion_items(project)
         if not items:
             console.print(f"[yellow]{self._tr('proofread_suggestion_no_translated_items')}[/yellow]")
@@ -272,19 +271,24 @@ class AIProofreadMenu:
                 task_result = future.result()
                 with lock:
                     completed_tasks += 1
+                    raw_response = task_result.get("raw_response")
+                    if raw_response_store is not None and isinstance(raw_response, dict):
+                        try:
+                            raw_response_store.append(
+                                {
+                                    **raw_response,
+                                    "run_id": store.run.get("run_id", ""),
+                                    "provider": store.run.get("provider", ""),
+                                    "model": store.run.get("model", ""),
+                                }
+                            )
+                        except Exception as exc:
+                            console.print(
+                                f"[yellow]{self._tr('proofread_raw_response_save_failed').format(exc)}[/yellow]"
+                            )
                     if task_result.get("skip", True):
                         return
                     total_tokens += task_result.get("prompt_tokens", 0) + task_result.get("completion_tokens", 0)
-                    raw_response = task_result.get("raw_response")
-                    if raw_response_store is not None and isinstance(raw_response, dict):
-                        raw_response_store.append(
-                            {
-                                **raw_response,
-                                "run_id": store.run.get("run_id", ""),
-                                "provider": store.run.get("provider", ""),
-                                "model": store.run.get("model", ""),
-                            }
-                        )
                     parsed = task_result.get("result")
                     if parsed is None:
                         return
@@ -373,7 +377,6 @@ class AIProofreadMenu:
             return
 
         tui = ProofreadSuggestionTUI(console, self.i18n)
-        manager = self._prepare_proofread_cache_manager(project_path, project)
         review_result = tui.run(store, project, save_project=manager.save_to_file)
         if review_result.accepted > 0:
             console.print(f"[green]{self._tr('proofread_suggestion_saved_cache').format(review_result.accepted)}[/green]")
@@ -533,10 +536,8 @@ class AIProofreadMenu:
     def _review_loaded_proofread_store(self, project_path: str, store):
         from ModuleFolders.UserInterface.Proofreader import ProofreadSuggestionTUI
 
-        cache_file = os.path.join(project_path, "cache", "AinieeCacheData.json")
-        project = CacheManager.read_from_file(cache_file)
+        manager, project = self._load_proofread_cache_manager(project_path)
         tui = ProofreadSuggestionTUI(console, self.i18n)
-        manager = self._prepare_proofread_cache_manager(project_path, project)
         review_result = tui.run(
             store,
             project,
@@ -550,11 +551,12 @@ class AIProofreadMenu:
         )
         self._press_enter()
 
-    def _prepare_proofread_cache_manager(self, project_path: str, project):
+    def _load_proofread_cache_manager(self, project_path: str):
         manager = self.host.cache_manager
-        manager.load_from_project(project)
+        manager.flush_pending_save()
+        manager.load_from_file(project_path, interactive_recovery=False)
         manager.save_to_file_require_path = project_path
-        return manager
+        return manager, manager.project
 
     def _execute_proofread(self, project_path: str):
         """执行校对"""
@@ -1095,6 +1097,7 @@ class AIProofreadMenu:
                 console.print(
                     f"[yellow]{self._tr('setting_proofread_save_raw_responses_desc')}[/yellow]"
                 )
+                time.sleep(3)
                 self.config["proofread_save_raw_responses"] = not save_raw_responses
 
             self.host.save_config()

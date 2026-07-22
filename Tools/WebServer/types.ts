@@ -355,6 +355,7 @@ export interface AppConfig {
   proofread_report_mode?: 'archive' | 'overwrite';
   proofread_archive_limit?: number;
   proofread_suggestion_mode?: 'proofread' | 'annotation';
+  proofread_save_raw_responses?: boolean;
   temp_file_limit?: number;
   cache_editor_page_size?: number;
   unlocked_themes?: string[]; // Persist unlocked themes

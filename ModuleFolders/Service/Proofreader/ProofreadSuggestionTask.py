@@ -67,6 +67,7 @@ class ProofreadSuggestionTask(Base):
                 return self._skip_result()
             time.sleep(0.1)
 
+        raw_response = None
         try:
             platform_config = self.config.get_platform_configuration("translationReq")
             requester = LLMRequester()
@@ -75,8 +76,21 @@ class ProofreadSuggestionTask(Base):
                 system_prompt=self.system_prompt,
                 platform_config=platform_config,
             )
+            if bool(getattr(self.config, "proofread_save_raw_responses", False)):
+                raw_response = {
+                    "batch_id": self.batch.batch_id,
+                    "batch_hash": self.batch.batch_hash,
+                    "suggestion_mode": self.suggestion_mode,
+                    "response_think": response_think,
+                    "response_content": response_content,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                }
             if skip:
-                return self._skip_result()
+                result = self._skip_result()
+                if raw_response is not None:
+                    result["raw_response"] = raw_response
+                return result
 
             parsed = parse_suggestion_response(
                 response_content,
@@ -89,20 +103,15 @@ class ProofreadSuggestionTask(Base):
                 "completion_tokens": completion_tokens,
                 "result": parsed,
             }
-            if bool(getattr(self.config, "proofread_save_raw_responses", False)):
-                result["raw_response"] = {
-                    "batch_id": self.batch.batch_id,
-                    "batch_hash": self.batch.batch_hash,
-                    "suggestion_mode": self.suggestion_mode,
-                    "response_think": response_think,
-                    "response_content": response_content,
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                }
+            if raw_response is not None:
+                result["raw_response"] = raw_response
             return result
         except Exception as exc:
             self.print(f"[{Base.tra('proofread_suggestion_error_prefix')}] {exc}")
-            return self._skip_result()
+            result = self._skip_result()
+            if raw_response is not None:
+                result["raw_response"] = raw_response
+            return result
 
     def _skip_result(self) -> dict:
         return {
