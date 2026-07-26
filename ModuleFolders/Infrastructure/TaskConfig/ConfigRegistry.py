@@ -1133,6 +1133,16 @@ register_config(ConfigItem(
 
 # --- WebServer 配置 (ADVANCED) ---
 register_config(ConfigItem(
+    key="enable_remote_access",
+    default=False,
+    level=ConfigLevel.ADVANCED,
+    config_type=ConfigType.BOOL,
+    i18n_key="setting_enable_remote_access",
+    i18n_desc_key="setting_enable_remote_access_desc",
+    category="advanced"
+))
+
+register_config(ConfigItem(
     key="webserver_port",
     default=8000,
     level=ConfigLevel.ADVANCED,

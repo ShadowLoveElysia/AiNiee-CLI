@@ -37,6 +37,12 @@ from Tools.MCPServer.security import (
     MCP_CALLER_VALUE,
     sanitize_data_for_mcp,
 )
+from ModuleFolders.Infrastructure.RemoteAccessPolicy import (
+    ensure_bind_allowed,
+    is_loopback_bind_host,
+    remote_access_enabled,
+    resolve_bind_host,
+)
 
 
 def _safe_load_json(path: str) -> Dict[str, Any]:
@@ -80,7 +86,7 @@ PROJECT_MCP_DEFAULTS = _load_project_mcp_defaults()
 
 DEFAULT_MCP_HOST = os.environ.get(
     "AINIEE_MCP_HOST",
-    str(PROJECT_MCP_DEFAULTS.get("mcp_server_host", "127.0.0.1") or "127.0.0.1"),
+    resolve_bind_host(PROJECT_MCP_DEFAULTS),
 )
 DEFAULT_MCP_PORT = int(
     os.environ.get(
@@ -110,18 +116,7 @@ DEFAULT_REGISTER_ROUTE_TOOLS = (
 
 
 def _is_loopback_bind_host(host: str) -> bool:
-    normalized = str(host or "").strip().lower().strip("[]")
-    if normalized == "localhost" or normalized == "::1":
-        return True
-    try:
-        parts = normalized.split(".")
-        return (
-            len(parts) == 4
-            and parts[0] == "127"
-            and all(0 <= int(part) <= 255 for part in parts)
-        )
-    except ValueError:
-        return False
+    return is_loopback_bind_host(host)
 
 
 def _mcp_tool_doc(summary: str, details: str = "") -> str:
@@ -171,6 +166,7 @@ class EmbeddedWebServerController:
         startup_timeout: float = 8.0,
         log_level: str = "info",
         mcp_auth_token: str = "",
+        allow_remote_access: bool = False,
     ):
         self.host = host
         self.port = port
@@ -178,6 +174,7 @@ class EmbeddedWebServerController:
         self.startup_timeout = startup_timeout
         self.log_level = log_level
         self.mcp_auth_token = mcp_auth_token
+        self.allow_remote_access = allow_remote_access
         self.started_by_self = False
         self.thread = None
         self.ws_module = None
@@ -211,6 +208,7 @@ class EmbeddedWebServerController:
             port=self.port,
             monitor_mode=False,
             log_level=self.log_level,
+            allow_remote_access=self.allow_remote_access,
         )
         self.started_by_self = self.thread is not None
 
@@ -967,6 +965,7 @@ def run_mcp_server(
     backend_host: str = DEFAULT_BACKEND_HOST,
     backend_port: int = DEFAULT_BACKEND_PORT,
     register_route_tools: bool = DEFAULT_REGISTER_ROUTE_TOOLS,
+    allow_remote_access: bool | None = None,
 ) -> Any:
     status = inspect_mcp_runtime(PROJECT_ROOT)
     if not status.get("available"):
@@ -981,10 +980,10 @@ def run_mcp_server(
         )
 
     transport = _normalize_transport(transport)
-    if transport != "stdio" and not _is_loopback_bind_host(host):
-        raise ValueError(
-            "Remote MCP binding is disabled because the MCP transport has no client authentication."
-        )
+    if allow_remote_access is None:
+        allow_remote_access = remote_access_enabled(PROJECT_MCP_DEFAULTS)
+    if transport != "stdio":
+        ensure_bind_allowed(host, allow_remote_access, "MCP")
     reusable_url = _try_get_reusable_mcp_service_url(transport, host, port, path)
     if reusable_url is not None:
         if is_reusable_mcp_service_running(host, port, path):
@@ -1000,6 +999,7 @@ def run_mcp_server(
         host_cli=host_cli,
         log_level="critical" if transport == "stdio" else "info",
         mcp_auth_token=mcp_auth_token,
+        allow_remote_access=allow_remote_access,
     )
     # MCP 复用现有 WebServer 作为后端宿主，避免再维护一套平行业务层。
     backend.start()

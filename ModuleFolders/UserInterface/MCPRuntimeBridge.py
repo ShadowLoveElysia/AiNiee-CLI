@@ -12,6 +12,10 @@ from rich.panel import Panel
 
 from Tools.MCPServer.docs import get_startup_hint_text
 from Tools.MCPServer.runtime import format_runtime_status_lines, inspect_mcp_runtime
+from ModuleFolders.Infrastructure.RemoteAccessPolicy import (
+    remote_access_enabled,
+    resolve_bind_host,
+)
 
 
 console = Console()
@@ -93,6 +97,7 @@ class MCPRuntimeBridge:
                 path=self._get_mcp_path(),
                 backend_host=self._get_backend_host(),
                 backend_port=self._get_backend_port(),
+                allow_remote_access=self._remote_access_enabled(),
             )
             return True
         except KeyboardInterrupt:
@@ -147,6 +152,7 @@ class MCPRuntimeBridge:
                 path=self._get_mcp_path(),
                 backend_host=self._get_backend_host(),
                 backend_port=self._get_backend_port(),
+                allow_remote_access=self._remote_access_enabled(),
             )
         except KeyboardInterrupt:
             console.print(self._t("msg_mcp_stopping_exit", "Stopping MCP......."))
@@ -194,7 +200,10 @@ class MCPRuntimeBridge:
         return default
 
     def _get_mcp_host(self) -> str:
-        return str(self._get_config_value("mcp_server_host", "127.0.0.1"))
+        return resolve_bind_host(getattr(self.host, "config", {}))
+
+    def _remote_access_enabled(self) -> bool:
+        return remote_access_enabled(getattr(self.host, "config", {}))
 
     def _get_mcp_port(self) -> int:
         try:

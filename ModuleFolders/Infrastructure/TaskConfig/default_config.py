@@ -96,6 +96,7 @@ DEFAULT_CONFIG = {
     "enable_background_prewarm": True,
     "exclude_rule_str": "",
     "recent_projects": [],
+    "enable_remote_access": False,
     "mcp_server_port": 8765,
     "sdk_request_mode": "httpx",
     "use_openai_sdk": False,

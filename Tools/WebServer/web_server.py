@@ -36,6 +36,11 @@ if PROJECT_ROOT not in sys.path:
 from ModuleFolders.Infrastructure.MangaFeatureGuard import get_manga_feature_status
 from ModuleFolders.Infrastructure.LLMRequester.SdkRequestMode import sync_sdk_request_mode_config
 from ModuleFolders.Infrastructure.Cache.CacheItem import TranslationStatus
+from ModuleFolders.Infrastructure.RemoteAccessPolicy import (
+    REMOTE_ACCESS_CONFIG_KEY,
+    ensure_bind_allowed,
+    is_loopback_bind_host,
+)
 from Tools.MCPServer.security import (
     AUTH_REQUIRED_HEADER,
     INTERNAL_AUTH_ENV,
@@ -666,6 +671,7 @@ WEB_SERVER_PATH = os.path.join(PROJECT_ROOT, "Tools", "WebServer")
 WEB_SESSION_TOKEN = os.environ.get("AINIEE_WEB_SESSION_TOKEN", "") or secrets.token_urlsafe(32)
 MCP_AUTH_TOKEN = os.environ.get("AINIEE_MCP_AUTH_TOKEN", "")
 INTERNAL_API_TOKEN = os.environ.get(INTERNAL_AUTH_ENV, "") or secrets.token_urlsafe(32)
+REMOTE_ACCESS_ENABLED = False
 PUBLIC_API_ROUTES = {
     ("POST", "/api/session/bootstrap"),
     ("GET", "/api/version"),
@@ -680,15 +686,7 @@ def _is_api_path(path: str) -> bool:
 
 
 def _is_loopback_bind_host(host: str) -> bool:
-    normalized = str(host or "").strip().lower().strip("[]")
-    if normalized == "localhost" or normalized == "::1":
-        return True
-    try:
-        return normalized.startswith("127.") and all(
-            0 <= int(part) <= 255 for part in normalized.split(".")
-        ) and len(normalized.split(".")) == 4
-    except ValueError:
-        return False
+    return is_loopback_bind_host(host)
 
 
 def _is_internal_api_path(path: str) -> bool:
@@ -772,7 +770,7 @@ async def bootstrap_web_session(request: Request, response: Response):
     origin = request.headers.get("origin", "").rstrip("/")
     expected_origin = f"{request.url.scheme}://{request.headers.get('host', '')}".rstrip("/")
     if (
-        not _is_loopback_bind_host(request.url.hostname or "")
+        (not REMOTE_ACCESS_ENABLED and not _is_loopback_bind_host(request.url.hostname or ""))
         or not origin
         or origin != expected_origin
     ):
@@ -1014,6 +1012,7 @@ async def save_config(config: AppConfig, request: Request):
         config_dict = config.model_dump(exclude_unset=True) if hasattr(config, 'model_dump') else config.dict(exclude_unset=True)
         config_dict = strip_mcp_security_metadata(config_dict)
         current_config = dict(_load_active_config_payload())
+        remote_access_value = current_config.get(REMOTE_ACCESS_CONFIG_KEY) is True
 
         # MCP 读取配置时会看到脱敏后的占位符，这里写回前要恢复当前已保存的真实密钥。
         if is_mcp_request(request):
@@ -1021,6 +1020,8 @@ async def save_config(config: AppConfig, request: Request):
             _ensure_no_mcp_secret_placeholder(config_dict, "Config payload")
 
         current_config.update(config_dict)
+        # This advanced security boundary is intentionally editable only from TUI.
+        current_config[REMOTE_ACCESS_CONFIG_KEY] = remote_access_value
         prefer_sdk_request_mode = "sdk_request_mode" in config_dict
         sync_sdk_request_mode_config(current_config, prefer_sdk_request_mode=prefer_sdk_request_mode)
         save_effective_config(current_config, prefer_sdk_request_mode=prefer_sdk_request_mode)
@@ -4644,13 +4645,12 @@ def run_server(
     port: int = 8000,
     monitor_mode: bool = False,
     log_level: str = "info",
+    allow_remote_access: bool = False,
 ):
     """Starts the FastAPI server in a separate thread."""
-    global SYSTEM_MODE, _current_server
-    if not _is_loopback_bind_host(host):
-        raise ValueError(
-            "Remote WebServer binding is disabled because no remote-user authentication is configured."
-        )
+    global SYSTEM_MODE, REMOTE_ACCESS_ENABLED, _current_server
+    ensure_bind_allowed(host, allow_remote_access, "WebServer")
+    REMOTE_ACCESS_ENABLED = allow_remote_access is True
     SYSTEM_MODE = "monitor" if monitor_mode else "full"
     
     # 动态记录 WebServer 的地址，以便子进程上报数据

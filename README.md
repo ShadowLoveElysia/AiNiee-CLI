@@ -217,9 +217,19 @@ uv run ainiee_cli.py mcp --mcp-transport stdio
 2. 选择 **15. Start Web Server**
 3. 程序将自动启动服务（默认端口 8000）并打开浏览器
 
+Web 服务默认仅监听 `127.0.0.1`，只能从本机访问。若需要从局域网或远程设备访问，请在 TUI 的项目设置 → 高级设置中开启 **局域网/远程访问**；该安全开关只在 TUI 设置列表中提供，Web 设置页无法修改。开关关闭时，每次从 TUI 启动 Web 服务都会显示一行黄色提示。
+
+在没有 TUI 的服务器上，可以用下面的命令仅为本次无头 Web 进程开放远程监听：
+
+```bash
+uv run python Tools/TauriShell/tauri_web_host.py --host 0.0.0.0 --port 8000 --allow-remote-access
+```
+
+`--allow-remote-access` 仅对本次启动有效，不会写入 Profile。未传入该参数时，非 loopback 的 `--host` 会被拒绝。远程访问只应在可信网络中开启；若要暴露到公网，请额外配置 TLS、独立的反向代理认证和必要的网络访问控制。
+
 **功能：**
 - 可视化看板：实时图表展示 RPM、TPM 及任务进度
-- 网络访问：支持局域网远程监控
+- 网络访问：开启 TUI 中的局域网/远程访问开关后，可从局域网或远程设备监控
 - 配置管理：网页端创建、切换配置 Profile
 - 队列管理：拖拽排序、实时编辑任务参数
 - 插件中心：启用/禁用 RAG 等高级功能
@@ -243,6 +253,7 @@ uv run ainiee_cli.py mcp --mcp-transport stdio
 - 若缺少依赖，程序会提示当前系统可直接执行的完整安装命令
 - 菜单启动默认使用后台 `streamable-http` 模式，等待 3 秒后返回菜单
 - 如果修改了 `mcp_server_port`，请同步更新 MCP 客户端中的连接路由
+- MCP 的 `streamable-http` / `sse` 监听使用同一个 TUI 高级设置 **局域网/远程访问**：默认只监听本机，开启后才允许局域网或远程连接。`stdio` 传输不受网络监听设置影响
 
 **直接接入 LLM 客户端：**
 1. 支持 `stdio` 的 MCP 客户端，可以直接把 AiNiee CLI 作为本地 MCP Server 接入。
@@ -326,7 +337,7 @@ uv run ainiee_cli.py mcp --mcp-transport streamable-http
 
 ```text
 本机地址: http://127.0.0.1:8765/mcp
-局域网地址: http://<你的局域网IP>:8765/mcp
+局域网地址（需先开启 TUI 的局域网/远程访问）: http://<你的局域网IP>:8765/mcp
 ```
 
 5. 如果启动 MCP 时提示缺少依赖，可以在项目根目录执行：

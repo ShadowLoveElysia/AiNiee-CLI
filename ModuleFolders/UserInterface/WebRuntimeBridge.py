@@ -15,6 +15,10 @@ from rich.prompt import IntPrompt, Confirm
 from rich.table import Table
 
 from ModuleFolders.Base.Base import Base
+from ModuleFolders.Infrastructure.RemoteAccessPolicy import (
+    remote_access_enabled,
+    resolve_bind_host,
+)
 from ModuleFolders.Infrastructure.TaskConfig.ConfigProfileService import (
     atomic_write_json,
     deep_merge,
@@ -44,7 +48,7 @@ class WebRuntimeBridge:
         return self.host.PROJECT_ROOT
 
     def handle_monitor_shortcut(self):
-        local_ip = "127.0.0.1"
+        local_ip = self._detect_local_ip() if self._remote_access_enabled() else "127.0.0.1"
         if self.host.web_server_thread is None or not self.host.web_server_thread.is_alive():
             try:
                 from Tools.WebServer.web_server import run_server
@@ -52,10 +56,13 @@ class WebRuntimeBridge:
 
                 self._configure_web_handlers(ws_module)
                 webserver_port = self._get_webserver_port()
+                webserver_host = self._get_webserver_host()
+                self._print_remote_access_disabled_warning()
                 self.host.web_server_thread = run_server(
-                    host="127.0.0.1",
+                    host=webserver_host,
                     port=webserver_port,
                     monitor_mode=True,
+                    allow_remote_access=self._remote_access_enabled(),
                 )
                 os.environ["AINIEE_INTERNAL_API_URL"] = f"http://127.0.0.1:{webserver_port}"
 
@@ -133,10 +140,18 @@ class WebRuntimeBridge:
 
         self._configure_web_handlers(ws_module)
         run_server = ws_module.run_server
+        webserver_host = self._get_webserver_host()
+        allow_remote_access = self._remote_access_enabled()
+        self._print_remote_access_disabled_warning()
 
         def start_server():
             try:
-                run_server(host="127.0.0.1", port=webserver_port, monitor_mode=False)
+                run_server(
+                    host=webserver_host,
+                    port=webserver_port,
+                    monitor_mode=False,
+                    allow_remote_access=allow_remote_access,
+                )
             except Exception as exc:
                 self.host.ui.log(f"[red]Failed to start web server: {exc}[/red]")
 
@@ -385,11 +400,18 @@ class WebRuntimeBridge:
 
         self._configure_web_handlers(ws_module)
         webserver_port = self._get_webserver_port()
+        webserver_host = self._get_webserver_host()
+        allow_remote_access = self._remote_access_enabled()
 
         console.print("[green]Starting Web Server...[/green]")
         console.print("[dim]Press Ctrl+C to stop the server and return to menu.[/dim]")
+        self._print_remote_access_disabled_warning()
 
-        server_thread = run_server(host="127.0.0.1", port=webserver_port)
+        server_thread = run_server(
+            host=webserver_host,
+            port=webserver_port,
+            allow_remote_access=allow_remote_access,
+        )
         if not server_thread:
             return
 
@@ -404,14 +426,12 @@ class WebRuntimeBridge:
         import webbrowser
 
         time.sleep(1)
-        console.print(
-            Panel(
-                f"Local: [bold cyan]http://127.0.0.1:{webserver_port}[/bold cyan]",
-                title="Web Server Active",
-                border_style="green",
-                expand=False,
+        endpoint_lines = [f"Local: [bold cyan]http://127.0.0.1:{webserver_port}[/bold cyan]"]
+        if allow_remote_access:
+            endpoint_lines.append(
+                f"{self.i18n.get('label_network')}: [bold cyan]http://{self._detect_local_ip()}:{webserver_port}[/bold cyan]"
             )
-        )
+        console.print(Panel("\n".join(endpoint_lines), title="Web Server Active", border_style="green", expand=False))
         webbrowser.open(f"http://127.0.0.1:{webserver_port}")
 
         self.host.web_server_active = True
@@ -483,6 +503,19 @@ class WebRuntimeBridge:
             return int(self.host.config.get("webserver_port", 8000) or 8000)
         except Exception:
             return 8000
+
+    def _remote_access_enabled(self):
+        return remote_access_enabled(getattr(self.host, "config", {}))
+
+    def _get_webserver_host(self):
+        return resolve_bind_host(getattr(self.host, "config", {}))
+
+    def _remote_access_disabled_message(self):
+        return self.i18n.get("warning_remote_access_disabled")
+
+    def _print_remote_access_disabled_warning(self):
+        if not self._remote_access_enabled():
+            console.print(f"[yellow]{self._remote_access_disabled_message()}[/yellow]")
 
     def _get_internal_api_base(self):
         return os.environ.get("AINIEE_INTERNAL_API_URL", f"http://127.0.0.1:{self._get_webserver_port()}")
