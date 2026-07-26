@@ -9,13 +9,17 @@ import rapidjson as json
 from ModuleFolders.Infrastructure.Automation.AutomationProgress import (
     PROGRESS_FILE_ENV,
     RUN_ID_ENV,
+    TASK_SECRETS_ENV,
     TERMINAL_STATUSES,
     AutomationProgressReporter,
+    get_progress_dir,
     new_run_id,
     progress_file_for_run,
     read_progress_file,
+    scrub_legacy_task_credentials,
     task_config_file_for_run,
 )
+from ModuleFolders.Infrastructure.SensitiveData import split_sensitive_data
 from ModuleFolders.Infrastructure.Automation.WorkflowRunner import describe_workflow_steps, WorkflowRunner
 
 
@@ -28,14 +32,16 @@ class AutomationProcessRunner:
     @classmethod
     def start(cls, task_config: dict, project_root: str = None) -> dict:
         project_root = project_root or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        scrub_legacy_task_credentials(get_progress_dir(project_root))
         run_id = new_run_id(task_config.get("rule_id", ""), task_config.get("input_path", ""))
         progress_file = progress_file_for_run(run_id, project_root)
         task_config_path = task_config_file_for_run(run_id, project_root)
 
-        prepared_config = dict(task_config)
-        prepared_config["automation_run_id"] = run_id
-        prepared_config["automation_progress_file"] = progress_file
-        prepared_config["workflow_description"] = describe_workflow_steps(prepared_config.get("workflow_steps") or [])
+        runtime_config = dict(task_config)
+        runtime_config["automation_run_id"] = run_id
+        runtime_config["automation_progress_file"] = progress_file
+        runtime_config["workflow_description"] = describe_workflow_steps(runtime_config.get("workflow_steps") or [])
+        prepared_config, secret_overlay = split_sensitive_data(runtime_config)
 
         with open(task_config_path, "w", encoding="utf-8") as file:
             json.dump(prepared_config, file, ensure_ascii=False, indent=2)
@@ -59,8 +65,13 @@ class AutomationProcessRunner:
         )
 
         env = os.environ.copy()
+        env.pop(TASK_SECRETS_ENV, None)
         env[PROGRESS_FILE_ENV] = progress_file
         env[RUN_ID_ENV] = run_id
+        if secret_overlay:
+            # Each Popen receives its own environment copy, so concurrent workflow
+            # credentials cannot overwrite one another or reach the task file.
+            env[TASK_SECRETS_ENV] = json.dumps(secret_overlay, ensure_ascii=False)
 
         log_path = os.path.join(os.path.dirname(progress_file), f"{run_id}.worker.log")
         log_file = open(log_path, "a", encoding="utf-8")

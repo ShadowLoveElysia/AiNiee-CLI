@@ -1187,7 +1187,7 @@
     "setting_proofread_suggestion_mode_proofread": "翻訳校正",
     "setting_proofread_suggestion_mode_annotation": "行末注釈",
     "setting_proofread_save_raw_responses": "AI 校正の生レスポンスを保存",
-    "setting_proofread_save_raw_responses_desc": "AI 校正ごとの完全な LLM 思考内容とレスポンスを出力フォルダーの proofread/AIProofreadLLMResponses.json に保存し、問題調査に利用します。追加のディスク容量を使用する場合があります。既定では無効です。",
+    "setting_proofread_save_raw_responses_desc": "AI 校正ごとの完全な LLM 思考内容とレスポンスを出力フォルダーの proofread/AIProofreadLLMResponses.jsonl に保存し、問題調査に利用します。追加のディスク容量を使用する場合があります。既定では無効です。",
     "proofread_raw_response_save_failed": "生レスポンスログを保存できませんでしたが、校正は続行します: {}",
     "prompt_select_action": "操作を選択:",
     "option_save_without_translation": "直接保存（翻訳なし）",

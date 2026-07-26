@@ -2,9 +2,15 @@ import threading
 import time
 import os
 import copy
+import uuid
+from collections import Counter
 import rapidjson as json
 from datetime import datetime, timedelta
 from ModuleFolders.Base.Base import Base
+from ModuleFolders.Infrastructure.SensitiveData import (
+    contains_sensitive_data,
+    sanitize_sensitive_data,
+)
 from ModuleFolders.Infrastructure.TaskConfig.TaskType import TaskType
 
 class QueueTaskItem:
@@ -17,7 +23,9 @@ class QueueTaskItem:
                  source=None, rule_id=None, automation_run_id=None,
                  automation_progress_file=None, automation_worker_pid=None,
                  trigger_file_path=None, trigger_file_name=None, trigger_detected_at=None,
-                 series_incremental=False, series_key=None, series_volume=None, extra=None):
+                 series_incremental=False, series_key=None, series_volume=None, extra=None,
+                 task_id=None):
+        self.task_id = self.normalize_task_id(task_id)
         self.task_type = task_type
         self.input_path = input_path
         self.output_path = output_path
@@ -65,9 +73,25 @@ class QueueTaskItem:
         self.last_activity_time = None  # 最后活动时间（ISO格式字符串）
         self.process_start_time = None  # 处理开始时间
 
+    @staticmethod
+    def normalize_task_id(task_id):
+        """Return a canonical UUID, generating one for legacy or invalid values."""
+        try:
+            return str(uuid.UUID(str(task_id)))
+        except (AttributeError, TypeError, ValueError):
+            return str(uuid.uuid4())
+
+    def to_runtime_dict(self):
+        """Return the full in-memory task, including temporary credential overrides."""
+        return copy.deepcopy({k: v for k, v in vars(self).items() if not k.startswith('_')})
+
+    def to_persistent_dict(self):
+        """Return a task representation that is safe to write or expose."""
+        return sanitize_sensitive_data(self.to_runtime_dict())
+
     def to_dict(self):
-        d = {k: v for k, v in vars(self).items() if not k.startswith('_')}
-        return d
+        """Keep the generic serializer safe by default."""
+        return self.to_persistent_dict()
 
     @classmethod
     def from_dict(cls, data):
@@ -180,7 +204,11 @@ class QueueManager(Base):
             try:
                 with open(self.queue_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    self.tasks = [QueueTaskItem.from_dict(d) for d in data]
+                task_ids_changed = self._replace_tasks_from_data(data)
+                # Legacy queue files may contain plaintext credentials. Keep them only
+                # in this process for compatibility, then immediately scrub the file.
+                if contains_sensitive_data(data) or task_ids_changed:
+                    self.save_tasks()
             except Exception as e:
                 self.error(f"Failed to load queue tasks: {e}")
                 self.tasks = []
@@ -191,9 +219,67 @@ class QueueManager(Base):
         try:
             os.makedirs(os.path.dirname(self.queue_file), exist_ok=True)
             with open(self.queue_file, 'w', encoding='utf-8') as f:
-                json.dump([t.to_dict() for t in self.tasks], f, indent=4, ensure_ascii=False)
+                json.dump([t.to_persistent_dict() for t in self.tasks], f, indent=4, ensure_ascii=False)
         except Exception as e:
             self.error(f"Failed to save queue tasks: {e}")
+
+    @staticmethod
+    def _credential_context(task):
+        return tuple(
+            getattr(task, field, None)
+            for field in ("platform", "api_url", "profile")
+        )
+
+    @staticmethod
+    def _runtime_credentials_by_task_id(tasks):
+        task_id_counts = Counter(getattr(task, "task_id", None) for task in tasks)
+        return {
+            task.task_id: (
+                QueueManager._credential_context(task),
+                getattr(task, "api_key", None),
+            )
+            for task in tasks
+            if task_id_counts.get(getattr(task, "task_id", None)) == 1
+        }
+
+    @staticmethod
+    def _restore_runtime_api_keys(old_tasks, new_tasks):
+        runtime_credentials = QueueManager._runtime_credentials_by_task_id(old_tasks)
+        incoming_id_counts = Counter(task.task_id for task in new_tasks)
+        duplicate_ids = {
+            task_id for task_id, count in incoming_id_counts.items() if count > 1
+        }
+        used_ids = {
+            task.task_id for task in new_tasks if task.task_id not in duplicate_ids
+        }
+
+        for task in new_tasks:
+            if task.task_id in duplicate_ids:
+                task.task_id = QueueTaskItem.normalize_task_id(None)
+                while task.task_id in used_ids:
+                    task.task_id = QueueTaskItem.normalize_task_id(None)
+                used_ids.add(task.task_id)
+                continue
+            credential_context, api_key = runtime_credentials.get(
+                task.task_id,
+                (None, None),
+            )
+            if (
+                task.api_key is None
+                and credential_context == QueueManager._credential_context(task)
+            ):
+                task.api_key = api_key
+
+    def _replace_tasks_from_data(self, data):
+        old_tasks = self.tasks
+        new_tasks = [QueueTaskItem.from_dict(item) for item in data]
+        self._restore_runtime_api_keys(old_tasks, new_tasks)
+        task_ids_changed = any(
+            not isinstance(item, dict) or item.get("task_id") != task.task_id
+            for item, task in zip(data, new_tasks)
+        )
+        self.tasks = new_tasks
+        return task_ids_changed
 
     def add_task(self, task_item):
         self.tasks.append(task_item)
@@ -535,28 +621,23 @@ class QueueManager(Base):
         try:
             # 保存当前锁定状态
             locked_states = {}
-            for i, task in enumerate(self.tasks):
+            for task in self.tasks:
                 if task.locked:
-                    locked_states[i] = {
-                        'task_id': f"{task.task_type}_{task.input_path}",
-                        'status': task.status
-                    }
+                    locked_states[task.task_id] = task.status
 
             # 重新加载任务
             with open(self.queue_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                new_tasks = [QueueTaskItem.from_dict(d) for d in data]
+            task_ids_changed = self._replace_tasks_from_data(data)
 
-            # 恢复锁定状态（通过任务特征匹配）
-            for i, new_task in enumerate(new_tasks):
-                task_id = f"{new_task.task_type}_{new_task.input_path}"
-                for old_index, locked_info in locked_states.items():
-                    if locked_info['task_id'] == task_id:
-                        new_task.locked = True
-                        new_task.status = locked_info['status']
-                        break
+            # 恢复锁定状态（通过持久化任务 ID 匹配）
+            for new_task in self.tasks:
+                if new_task.task_id in locked_states:
+                    new_task.locked = True
+                    new_task.status = locked_states[new_task.task_id]
 
-            self.tasks = new_tasks
+            if contains_sensitive_data(data) or task_ids_changed:
+                self.save_tasks()
 
             # 只有在非静默模式下才打印成功日志
             if not quiet:
@@ -566,6 +647,24 @@ class QueueManager(Base):
         except Exception as e:
             self.error(f"Failed to hot reload queue: {e}")
             return False
+
+    def get_queue_json(self):
+        """Return the editable queue document without credential material."""
+        return json.dumps(
+            [task.to_persistent_dict() for task in self.tasks],
+            indent=4,
+            ensure_ascii=False,
+        )
+
+    def load_from_json(self, content):
+        """Load a raw queue document while ensuring its persisted form is sanitized."""
+        data = json.loads(content)
+        if not isinstance(data, list):
+            raise ValueError("Queue JSON must be an array")
+
+        self._replace_tasks_from_data(data)
+        self.save_tasks()
+        return True
 
     def get_next_unlocked_task(self, start_index=0):
         """获取下一个未锁定的待执行任务"""
@@ -982,7 +1081,7 @@ class QueueManager(Base):
         try:
             from ModuleFolders.Infrastructure.Automation.AutomationProcessRunner import AutomationProcessRunner
 
-            task_config = task.to_dict()
+            task_config = task.to_runtime_dict()
             run_info = AutomationProcessRunner.start(
                 task_config,
                 project_root=getattr(cli_menu, "PROJECT_ROOT", None),

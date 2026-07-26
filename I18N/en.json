@@ -1215,7 +1215,7 @@
     "setting_proofread_suggestion_mode_proofread": "Translation Review",
     "setting_proofread_suggestion_mode_annotation": "End-of-line Annotation",
     "setting_proofread_save_raw_responses": "Save Raw AI Proofread Responses",
-    "setting_proofread_save_raw_responses_desc": "Save every complete LLM reasoning and response from AI proofread runs to proofread/AIProofreadLLMResponses.json in the output folder for debugging. This may use additional disk space and is disabled by default.",
+    "setting_proofread_save_raw_responses_desc": "Save every complete LLM reasoning and response from AI proofread runs to proofread/AIProofreadLLMResponses.jsonl in the output folder for debugging. This may use additional disk space and is disabled by default.",
     "proofread_raw_response_save_failed": "Failed to save the raw response log, but proofreading will continue: {}",
     "prompt_select_action": "Select action:",
     "option_save_without_translation": "Save directly (no translation)",

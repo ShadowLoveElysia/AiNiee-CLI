@@ -1231,7 +1231,7 @@
     "setting_proofread_suggestion_mode_proofread": "翻譯校對",
     "setting_proofread_suggestion_mode_annotation": "行尾批註",
     "setting_proofread_save_raw_responses": "儲存 AI 校對原始回應",
-    "setting_proofread_save_raw_responses_desc": "開啟後會把每次 AI 校對的完整 LLM 思考與回應內容儲存到輸出目錄的 proofread/AIProofreadLLMResponses.json，方便查看模型回應並排查錯誤；可能占用部分磁碟空間。預設關閉。",
+    "setting_proofread_save_raw_responses_desc": "開啟後會把每次 AI 校對的完整 LLM 思考與回應內容儲存到輸出目錄的 proofread/AIProofreadLLMResponses.jsonl，方便查看模型回應並排查錯誤；可能占用部分磁碟空間。預設關閉。",
     "proofread_raw_response_save_failed": "原始回應記錄儲存失敗，但校對將繼續：{}",
     "prompt_select_action": "請選擇操作:",
     "option_save_without_translation": "直接儲存到術語表（無翻譯）",

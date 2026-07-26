@@ -66,6 +66,16 @@ from ModuleFolders.Infrastructure.TaskConfig.PolishingMode import (
 console = Console()
 current_lang, i18n = initialize_i18n(PROJECT_ROOT)
 SPONSOR_IDS = ("往生", "Kingxiao")
+WEB_TASK_API_KEY_ENV = "AINIEE_WEB_TASK_API_KEY"
+
+
+def _consume_web_task_api_key(args, environ=None):
+    """Apply a Web worker credential override and remove it from the environment."""
+    environment = os.environ if environ is None else environ
+    api_key = environment.pop(WEB_TASK_API_KEY_ENV, None)
+    if api_key and not args.api_key:
+        args.api_key = api_key
+
 
 class CLIMenu:
     def __init__(self):
@@ -2532,6 +2542,7 @@ def main():
     parser.add_argument('--pre-lines', type=int, help="Context lines to include")
 
     args = parser.parse_args()
+    _consume_web_task_api_key(args)
 
     # CLI shortcut layer: allow `ainiee --mcp` to map onto the existing `mcp`
     # task entry without duplicating any MCP runtime logic in the parser.

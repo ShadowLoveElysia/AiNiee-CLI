@@ -4,6 +4,8 @@ import { MangaDeleteRuntimeValidationHistoryResult, MangaExportFormat, MangaExpo
 
 // Base API URL
 const API_BASE = '/api';
+const AUTH_REQUIRED_HEADER = 'X-AiNiee-Auth-Required';
+const WEB_SESSION_AUTH_REQUIRED = 'web-session';
 
 export class ApiRequestError extends Error {
     constructor(message: string, public readonly status: number) {
@@ -18,10 +20,26 @@ const responseError = async (response: Response, fallback: string): Promise<ApiR
 };
 
 let webSessionBootstrap: Promise<void> | null = null;
+const nativeFetch = window.fetch.bind(window);
+
+const isProtectedApiRequest = (input: RequestInfo | URL, init?: RequestInit): boolean => {
+    const requestUrl = input instanceof Request ? input.url : String(input);
+    const url = new URL(requestUrl, window.location.href);
+    if (url.origin !== window.location.origin) return false;
+    if (url.pathname !== API_BASE && !url.pathname.startsWith(`${API_BASE}/`)) return false;
+
+    const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    if (method === 'OPTIONS') return false;
+    if (method === 'POST' && url.pathname === `${API_BASE}/session/bootstrap`) return false;
+    if (method === 'GET' && (url.pathname === `${API_BASE}/version` || url.pathname === `${API_BASE}/system/mode`)) {
+        return false;
+    }
+    return true;
+};
 
 const bootstrapWebSession = async (force = false): Promise<void> => {
     if (!webSessionBootstrap || force) {
-        webSessionBootstrap = fetch(`${API_BASE}/session/bootstrap`, { method: 'POST' }).then(async response => {
+        webSessionBootstrap = nativeFetch(`${API_BASE}/session/bootstrap`, { method: 'POST' }).then(async response => {
             if (!response.ok) throw await responseError(response, 'Failed to establish Web UI session');
         });
     }
@@ -31,6 +49,32 @@ const bootstrapWebSession = async (force = false): Promise<void> => {
         webSessionBootstrap = null;
         throw error;
     }
+};
+
+export const installAuthenticatedApiFetch = (): void => {
+    if (window.fetch === authenticatedApiFetch) return;
+    window.fetch = authenticatedApiFetch;
+};
+
+const authenticatedApiFetch: typeof window.fetch = async (input, init) => {
+    if (!isProtectedApiRequest(input, init)) {
+        return nativeFetch(input, init);
+    }
+
+    await bootstrapWebSession();
+    const preparedRequest = new Request(input, init);
+    const retryRequest = preparedRequest.clone();
+    let response = await nativeFetch(preparedRequest);
+    if (
+        response.status !== 403
+        || response.headers.get(AUTH_REQUIRED_HEADER) !== WEB_SESSION_AUTH_REQUIRED
+    ) {
+        return response;
+    }
+
+    await bootstrapWebSession(true);
+    response = await nativeFetch(retryRequest);
+    return response;
 };
 
 interface TaskStatusResponse {
@@ -79,13 +123,7 @@ export const DataService = {
 
     async getConfig(): Promise<AppConfig> {
         try {
-            await bootstrapWebSession();
-            let res = await fetch(`${API_BASE}/config`);
-            if (res.status === 403) {
-                // A restarted backend has a new in-memory token even when WebView reused its SPA cache.
-                await bootstrapWebSession(true);
-                res = await fetch(`${API_BASE}/config`);
-            }
+            const res = await fetch(`${API_BASE}/config`);
             if (!res.ok) throw await responseError(res, 'Failed to fetch config');
             return await res.json();
         } catch (error) {

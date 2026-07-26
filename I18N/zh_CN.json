@@ -1246,7 +1246,7 @@
     "setting_proofread_suggestion_mode_proofread": "翻译校对",
     "setting_proofread_suggestion_mode_annotation": "行尾批注",
     "setting_proofread_save_raw_responses": "保存AI校对原始响应",
-    "setting_proofread_save_raw_responses_desc": "开启后会把每次AI校对的完整LLM思考与返回内容保存到输出目录的 proofread/AIProofreadLLMResponses.json，便于查看模型返回内容并排查错误；可能占用部分磁盘空间。默认关闭。",
+    "setting_proofread_save_raw_responses_desc": "开启后会把每次AI校对的完整LLM思考与返回内容保存到输出目录的 proofread/AIProofreadLLMResponses.jsonl，便于查看模型返回内容并排查错误；可能占用部分磁盘空间。默认关闭。",
     "proofread_raw_response_save_failed": "原始响应日志保存失败，但校对将继续：{}",
     "prompt_select_action": "请选择操作:",
     "option_save_without_translation": "直接保存到术语表（无翻译）",

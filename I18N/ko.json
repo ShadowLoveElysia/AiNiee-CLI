@@ -1231,7 +1231,7 @@
     "setting_proofread_suggestion_mode_proofread": "번역 교정",
     "setting_proofread_suggestion_mode_annotation": "줄 끝 주석",
     "setting_proofread_save_raw_responses": "AI 교정 원본 응답 저장",
-    "setting_proofread_save_raw_responses_desc": "각 AI 교정의 전체 LLM 추론과 응답을 출력 폴더의 proofread/AIProofreadLLMResponses.json에 저장하여 문제를 확인합니다. 추가 디스크 공간을 사용할 수 있으며 기본값은 꺼짐입니다.",
+    "setting_proofread_save_raw_responses_desc": "각 AI 교정의 전체 LLM 추론과 응답을 출력 폴더의 proofread/AIProofreadLLMResponses.jsonl에 저장하여 문제를 확인합니다. 추가 디스크 공간을 사용할 수 있으며 기본값은 꺼짐입니다.",
     "proofread_raw_response_save_failed": "원본 응답 로그를 저장하지 못했지만 교정은 계속됩니다: {}",
     "prompt_select_action": "동작 선택:",
     "option_save_without_translation": "직접 저장(번역 없음)",

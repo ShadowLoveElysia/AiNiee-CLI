@@ -685,14 +685,18 @@ class TranslatorTask(Base):
             # 通道2: 网页端同步 (直接调用 WebServer 内部接口)
             import os as system_os
             try:
+                from Tools.MCPServer.security import INTERNAL_AUTH_ENV, INTERNAL_AUTH_HEADER
+
                 # 动态获取父进程传递的 WebServer 地址
                 webserver_port = getattr(self.config, "webserver_port", 8000)
                 internal_api_base = system_os.environ.get("AINIEE_INTERNAL_API_URL", f"http://127.0.0.1:{webserver_port}")
+                internal_api_token = system_os.environ.get(INTERNAL_AUTH_ENV, "")
                 if not Base.is_task_session_active(session_id):
                     return {}
                 requests.post(
                     f"{internal_api_base}/api/internal/update_comparison",
                     json={"source": all_source, "translation": all_trans},
+                    headers={INTERNAL_AUTH_HEADER: internal_api_token},
                     timeout=1
                 )
             except:

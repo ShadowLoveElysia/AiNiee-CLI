@@ -7,12 +7,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import rapidjson as json
+import psutil
 from rich.text import Text
+
+from ModuleFolders.Infrastructure.SensitiveData import (
+    contains_sensitive_data,
+    sanitize_sensitive_data,
+)
 
 
 PROGRESS_FILE_ENV = "AINIEE_AUTOMATION_PROGRESS_FILE"
 RUN_ID_ENV = "AINIEE_AUTOMATION_RUN_ID"
 TASK_CONFIG_ENV = "AINIEE_AUTOMATION_TASK_CONFIG"
+TASK_SECRETS_ENV = "AINIEE_AUTOMATION_TASK_SECRETS"
 TERMINAL_STATUSES = {"completed", "partial", "enqueued", "error", "stopped", "interrupted"}
 
 
@@ -357,9 +364,69 @@ def read_progress_file(path: str, max_logs: int = 20) -> dict:
     return state
 
 
+def _is_automation_worker_active(task_path: Path) -> bool:
+    progress_path = task_path.with_name(task_path.name.removesuffix(".task.json") + ".jsonl")
+    state = read_progress_file(str(progress_path)) if progress_path.is_file() else {}
+    try:
+        pid = int(state.get("pid") or 0)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0 or state.get("status") in TERMINAL_STATUSES:
+        return False
+    try:
+        if not psutil.pid_exists(pid):
+            return False
+        command = " ".join(psutil.Process(pid).cmdline()).replace("\\", "/").lower()
+        expected_task_path = str(task_path).replace("\\", "/").lower()
+        return (
+            "modulefolders.infrastructure.automation.automationworker" in command
+            and expected_task_path in command
+        )
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return False
+    except psutil.AccessDenied:
+        return True
+    except Exception:
+        # If process inspection is unavailable, preserving the file is safer than
+        # rewriting configuration that an active legacy worker may still need.
+        return True
+
+
+def _atomic_write_json(path: Path, payload: Any) -> None:
+    tmp_path = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+    )
+    try:
+        with tmp_path.open("w", encoding="utf-8") as writer:
+            json.dump(payload, writer, ensure_ascii=False, indent=2)
+            writer.flush()
+            os.fsync(writer.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def scrub_legacy_task_credentials(progress_dir: str) -> None:
+    for task_path in Path(progress_dir).glob("*.task.json"):
+        if _is_automation_worker_active(task_path):
+            continue
+        try:
+            with task_path.open("r", encoding="utf-8") as reader:
+                payload = json.load(reader)
+            if contains_sensitive_data(payload):
+                _atomic_write_json(task_path, sanitize_sensitive_data(payload))
+        except (OSError, ValueError, TypeError):
+            # A damaged legacy file must remain available for manual recovery.
+            continue
+
+
 class AutomationProgressStore:
     def __init__(self, project_root: str = None):
         self.progress_dir = get_progress_dir(project_root)
+        scrub_legacy_task_credentials(self.progress_dir)
 
     def list_states(
         self,

@@ -194,11 +194,15 @@ class TaskExecutor(Base):
 
         try:
             import requests
+            from Tools.MCPServer.security import INTERNAL_AUTH_ENV, INTERNAL_AUTH_HEADER
+
             webserver_port = self.load_config().get("webserver_port", 8000)
             internal_api_base = os.environ.get("AINIEE_INTERNAL_API_URL", f"http://127.0.0.1:{webserver_port}")
+            internal_api_token = os.environ.get(INTERNAL_AUTH_ENV, "")
             requests.post(
                 f"{internal_api_base}/api/internal/update_comparison",
                 json={"source": source_text, "translation": translated_text},
+                headers={INTERNAL_AUTH_HEADER: internal_api_token},
                 timeout=1,
             )
         except Exception:

@@ -80,7 +80,7 @@ PROJECT_MCP_DEFAULTS = _load_project_mcp_defaults()
 
 DEFAULT_MCP_HOST = os.environ.get(
     "AINIEE_MCP_HOST",
-    str(PROJECT_MCP_DEFAULTS.get("mcp_server_host", "0.0.0.0") or "0.0.0.0"),
+    str(PROJECT_MCP_DEFAULTS.get("mcp_server_host", "127.0.0.1") or "127.0.0.1"),
 )
 DEFAULT_MCP_PORT = int(
     os.environ.get(
@@ -107,6 +107,21 @@ DEFAULT_REGISTER_ROUTE_TOOLS = (
     os.environ.get("AINIEE_MCP_REGISTER_ROUTE_TOOLS", "").strip().lower()
     in {"1", "true", "yes", "on"}
 )
+
+
+def _is_loopback_bind_host(host: str) -> bool:
+    normalized = str(host or "").strip().lower().strip("[]")
+    if normalized == "localhost" or normalized == "::1":
+        return True
+    try:
+        parts = normalized.split(".")
+        return (
+            len(parts) == 4
+            and parts[0] == "127"
+            and all(0 <= int(part) <= 255 for part in parts)
+        )
+    except ValueError:
+        return False
 
 
 def _mcp_tool_doc(summary: str, details: str = "") -> str:
@@ -178,6 +193,9 @@ class EmbeddedWebServerController:
         import Tools.WebServer.web_server as ws_module
 
         self.ws_module = ws_module
+        if self.mcp_auth_token:
+            # WebServer may have been imported before MCP generated its bridge token.
+            ws_module.MCP_AUTH_TOKEN = self.mcp_auth_token
         if self.host_cli is not None:
             try:
                 self.host_cli.web_runtime_bridge._configure_web_handlers(ws_module)
@@ -185,6 +203,7 @@ class EmbeddedWebServerController:
                 pass
 
         if _is_port_open(self.host, self.port):
+            self._verify_reused_backend_access()
             return
 
         self.thread = ws_module.run_server(
@@ -215,6 +234,30 @@ class EmbeddedWebServerController:
                 port=self.port,
             )
         )
+
+    def _verify_reused_backend_access(self) -> None:
+        """Verify that an already-running backend accepts this MCP bridge token."""
+        import requests
+
+        try:
+            response = requests.get(
+                f"{self.base_url}/api/config",
+                headers={
+                    MCP_CALLER_HEADER: MCP_CALLER_VALUE,
+                    MCP_AUTH_HEADER: self.mcp_auth_token,
+                },
+                timeout=min(max(self.startup_timeout, 0.5), 5.0),
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Unable to verify the existing WebServer MCP bridge token at {self.base_url}."
+            ) from exc
+
+        if response.status_code < 200 or response.status_code >= 300:
+            raise RuntimeError(
+                "The existing WebServer rejected the MCP bridge token. "
+                "Start both processes with the same AINIEE_MCP_AUTH_TOKEN or use a free backend port."
+            )
 
     def stop(self) -> None:
         if not self.started_by_self or self.ws_module is None:
@@ -564,7 +607,9 @@ def _sanitize_tool_name(method: str, path: str) -> str:
 
 
 def _is_public_api_route(path: str) -> bool:
-    return path.startswith("/api/") and not path.startswith("/api/internal/")
+    return path.startswith("/api/") and not (
+        path == "/api/internal" or path.startswith("/api/internal/")
+    )
 
 
 def _extract_api_routes(ws_module) -> List[Dict[str, str]]:
@@ -936,6 +981,10 @@ def run_mcp_server(
         )
 
     transport = _normalize_transport(transport)
+    if transport != "stdio" and not _is_loopback_bind_host(host):
+        raise ValueError(
+            "Remote MCP binding is disabled because the MCP transport has no client authentication."
+        )
     reusable_url = _try_get_reusable_mcp_service_url(transport, host, port, path)
     if reusable_url is not None:
         if is_reusable_mcp_service_running(host, port, path):

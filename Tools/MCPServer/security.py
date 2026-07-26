@@ -3,11 +3,17 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
+from ModuleFolders.Infrastructure.SensitiveData import is_sensitive_field
+
 
 # MCP 通过内部 Web API 访问项目能力时，会带上这个调用来源标记。
 MCP_CALLER_HEADER = "X-AiNiee-Caller"
 MCP_CALLER_VALUE = "mcp"
 MCP_AUTH_HEADER = "X-AiNiee-Mcp-Auth"
+INTERNAL_AUTH_HEADER = "X-AiNiee-Internal-Auth"
+INTERNAL_AUTH_ENV = "AINIEE_INTERNAL_API_TOKEN"
+AUTH_REQUIRED_HEADER = "X-AiNiee-Auth-Required"
+WEB_SESSION_AUTH_REQUIRED = "web-session"
 WEB_SESSION_COOKIE_NAME = "ainiee_web_session"
 
 # 对 LLM 暴露时统一使用固定占位符，避免泄漏真实密钥的任何片段。
@@ -24,12 +30,6 @@ MCP_SECRET_ACCESS_NOTICE = (
     "The user may view them only in the Web UI with a valid Web session; MCP returns redacted placeholders. "
     "Sensitive Web API routes require a valid Web UI session cookie or MCP bridge token."
 )
-MCP_SENSITIVE_FIELDS = {
-    "api_key",
-    "access_key",
-    "secret_key",
-}
-
 # 这些接口把 JSON 当字符串返回，需要额外尝试解析后再递归脱敏。
 JSON_TEXT_PATHS = {
     "/api/queue/raw",
@@ -57,9 +57,7 @@ def sanitize_data_for_mcp(
     inject_notice: bool = True,
 ) -> Any:
     """Recursively redact secret fields before data is returned to MCP / LLM clients."""
-    normalized_field = _normalize_field_name(field_name)
-
-    if normalized_field in MCP_SENSITIVE_FIELDS:
+    if is_sensitive_field(field_name):
         return _redact_secret_value(data)
 
     if isinstance(data, dict):
@@ -103,9 +101,7 @@ def restore_redacted_secrets(new_data: Any, current_data: Any = None, *, field_n
     This prevents a round-trip like "read sanitized config -> edit one field -> save full config"
     from accidentally overwriting real keys with the redacted placeholder.
     """
-    normalized_field = _normalize_field_name(field_name)
-
-    if normalized_field in MCP_SENSITIVE_FIELDS:
+    if is_sensitive_field(field_name):
         if new_data == MCP_SECRET_PLACEHOLDER:
             # 如果当前不存在旧值，就保留占位符，让上层保存逻辑明确拒绝这次写入。
             return current_data if current_data not in (None, "") else MCP_SECRET_PLACEHOLDER
@@ -146,9 +142,7 @@ def restore_redacted_secrets(new_data: Any, current_data: Any = None, *, field_n
 
 def contains_redacted_secret(data: Any, *, field_name: Optional[str] = None) -> bool:
     """Detect whether redacted placeholders are still present after restoration."""
-    normalized_field = _normalize_field_name(field_name)
-
-    if normalized_field in MCP_SENSITIVE_FIELDS:
+    if is_sensitive_field(field_name):
         if data == MCP_SECRET_PLACEHOLDER:
             return True
 
@@ -193,10 +187,6 @@ def restore_redacted_json_text(content: str, current_content: str = "") -> str:
     current_parsed = _try_parse_json_text(current_content)
     restored = restore_redacted_secrets(parsed, current_parsed)
     return _dump_json_text(restored)
-
-
-def _normalize_field_name(field_name: Optional[str]) -> str:
-    return str(field_name or "").strip().lower()
 
 
 def strip_mcp_security_metadata(data: Any) -> Any:

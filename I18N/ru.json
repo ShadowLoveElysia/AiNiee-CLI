@@ -1231,7 +1231,7 @@
     "setting_proofread_suggestion_mode_proofread": "Вычитка перевода",
     "setting_proofread_suggestion_mode_annotation": "Концевое примечание",
     "setting_proofread_save_raw_responses": "Сохранять исходные ответы AI-вычитки",
-    "setting_proofread_save_raw_responses_desc": "Сохраняет полные рассуждения и ответы LLM для каждого запуска AI-вычитки в proofread/AIProofreadLLMResponses.json в выходной папке для диагностики. Может занимать дополнительное место на диске. По умолчанию отключено.",
+    "setting_proofread_save_raw_responses_desc": "Сохраняет полные рассуждения и ответы LLM для каждого запуска AI-вычитки в proofread/AIProofreadLLMResponses.jsonl в выходной папке для диагностики. Может занимать дополнительное место на диске. По умолчанию отключено.",
     "proofread_raw_response_save_failed": "Не удалось сохранить журнал исходных ответов, но вычитка продолжится: {}",
     "prompt_select_action": "Выберите действие:",
     "option_save_without_translation": "Сохранить напрямую (без перевода)",

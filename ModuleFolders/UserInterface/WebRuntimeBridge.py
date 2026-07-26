@@ -44,7 +44,7 @@ class WebRuntimeBridge:
         return self.host.PROJECT_ROOT
 
     def handle_monitor_shortcut(self):
-        local_ip = self._detect_local_ip()
+        local_ip = "127.0.0.1"
         if self.host.web_server_thread is None or not self.host.web_server_thread.is_alive():
             try:
                 from Tools.WebServer.web_server import run_server
@@ -53,7 +53,7 @@ class WebRuntimeBridge:
                 self._configure_web_handlers(ws_module)
                 webserver_port = self._get_webserver_port()
                 self.host.web_server_thread = run_server(
-                    host="0.0.0.0",
+                    host="127.0.0.1",
                     port=webserver_port,
                     monitor_mode=True,
                 )
@@ -384,13 +384,12 @@ class WebRuntimeBridge:
         import Tools.WebServer.web_server as ws_module
 
         self._configure_web_handlers(ws_module)
-        local_ip = self._detect_local_ip()
         webserver_port = self._get_webserver_port()
 
         console.print("[green]Starting Web Server...[/green]")
         console.print("[dim]Press Ctrl+C to stop the server and return to menu.[/dim]")
 
-        server_thread = run_server(host="0.0.0.0", port=webserver_port)
+        server_thread = run_server(host="127.0.0.1", port=webserver_port)
         if not server_thread:
             return
 
@@ -407,8 +406,7 @@ class WebRuntimeBridge:
         time.sleep(1)
         console.print(
             Panel(
-                f"Local: [bold cyan]http://127.0.0.1:{webserver_port}[/bold cyan]\n"
-                f"Network: [bold cyan]http://{local_ip}:{webserver_port}[/bold cyan]",
+                f"Local: [bold cyan]http://127.0.0.1:{webserver_port}[/bold cyan]",
                 title="Web Server Active",
                 border_style="green",
                 expand=False,
@@ -495,10 +493,12 @@ class WebRuntimeBridge:
     def _push_stats_to_webserver(self, stats_data):
         try:
             import requests
+            from Tools.MCPServer.security import INTERNAL_AUTH_ENV, INTERNAL_AUTH_HEADER
 
             response = requests.post(
                 f"{self._get_internal_api_base()}/api/internal/update_stats",
                 json=stats_data,
+                headers={INTERNAL_AUTH_HEADER: os.environ.get(INTERNAL_AUTH_ENV, "")},
                 timeout=1.0,
             )
             return response.status_code == 200
@@ -508,10 +508,12 @@ class WebRuntimeBridge:
     def _push_log_to_webserver(self, message, log_type="info"):
         try:
             import requests
+            from Tools.MCPServer.security import INTERNAL_AUTH_ENV, INTERNAL_AUTH_HEADER
 
             response = requests.post(
                 f"{self._get_internal_api_base()}/api/internal/push_log",
                 json={"message": message, "type": log_type},
+                headers={INTERNAL_AUTH_HEADER: os.environ.get(INTERNAL_AUTH_ENV, "")},
                 timeout=1.0,
             )
             return response.status_code == 200

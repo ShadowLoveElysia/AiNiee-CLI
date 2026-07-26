@@ -48,7 +48,7 @@ class MCPRuntimeBridge:
                 (
                     f"{self._label_line('label_transport', 'Transport', 'streamable-http')}\n"
                     f"{self._label_line('label_local', 'Local', self.get_mcp_local_endpoint())}\n"
-                    f"{self._label_line('label_network', 'Network', self.get_mcp_network_endpoint())}\n\n"
+                    "\n"
                     f"{self._get_route_update_notice()}\n\n"
                     f"{self._get_llm_guide_notice()}\n\n"
                     f"{self._t('msg_mcp_menu_returning', '3 秒后返回菜单界面...')}"
@@ -74,7 +74,6 @@ class MCPRuntimeBridge:
             (
                 f"{self._label_line('label_transport', 'Transport', 'streamable-http')}\n"
                 f"{self._label_line('label_local', 'Local', self.get_mcp_local_endpoint())}\n"
-                f"{self._label_line('label_network', 'Network', self.get_mcp_network_endpoint())}\n"
                 f"{self._label_line('label_backend', 'Backend', f'http://{self._get_backend_host()}:{self._get_backend_port()}')}\n\n"
                 f"{self._get_route_update_notice()}\n\n"
                 f"{self._get_llm_guide_notice()}\n\n"
@@ -195,7 +194,7 @@ class MCPRuntimeBridge:
         return default
 
     def _get_mcp_host(self) -> str:
-        return str(self._get_config_value("mcp_server_host", "0.0.0.0"))
+        return str(self._get_config_value("mcp_server_host", "127.0.0.1"))
 
     def _get_mcp_port(self) -> int:
         try:

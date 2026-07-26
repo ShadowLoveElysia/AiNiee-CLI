@@ -37,8 +37,12 @@ from ModuleFolders.Infrastructure.MangaFeatureGuard import get_manga_feature_sta
 from ModuleFolders.Infrastructure.LLMRequester.SdkRequestMode import sync_sdk_request_mode_config
 from ModuleFolders.Infrastructure.Cache.CacheItem import TranslationStatus
 from Tools.MCPServer.security import (
+    AUTH_REQUIRED_HEADER,
+    INTERNAL_AUTH_ENV,
+    INTERNAL_AUTH_HEADER,
     MCP_AUTH_HEADER,
     MCP_SECRET_PLACEHOLDER,
+    WEB_SESSION_AUTH_REQUIRED,
     WEB_SESSION_COOKIE_NAME,
     contains_redacted_secret,
     is_mcp_request,
@@ -92,6 +96,9 @@ except Exception as exc:
         )
 
 # --- Global State & Task Management ---
+
+WEB_TASK_API_KEY_ENV = "AINIEE_WEB_TASK_API_KEY"
+
 
 def resolve_task_worker_python(project_root: str, platform_name: str | None = None) -> str:
     """Return the project virtual-environment interpreter for task workers."""
@@ -291,8 +298,6 @@ class TaskManager:
                 cli_args.extend(["--model", payload["model"]])
             if payload.get("api_url"):
                 cli_args.extend(["--api-url", payload["api_url"]])
-            if payload.get("api_key"):
-                cli_args.extend(["--api-key", payload["api_key"]])
             
             if payload.get("failover") is True:
                 cli_args.extend(["--failover", "on"])
@@ -322,8 +327,13 @@ class TaskManager:
                 # 注入环境变量以便子进程知道 WebServer 的内部接口位置
                 import os as system_os
                 env = system_os.environ.copy()
+                # Keep credentials out of argv, which is commonly visible in process listings.
+                env.pop(WEB_TASK_API_KEY_ENV, None)
+                if payload.get("api_key"):
+                    env[WEB_TASK_API_KEY_ENV] = str(payload["api_key"])
                 # 获取当前 WebServer 的运行地址
                 env["AINIEE_INTERNAL_API_URL"] = task_manager.internal_api_url
+                env[INTERNAL_AUTH_ENV] = INTERNAL_API_TOKEN
                 # 强制子进程使用 UTF-8 编码输出，防止在 Windows 下产生编码冲突
                 env["PYTHONIOENCODING"] = "utf-8"
                 # 标记该进程为后端 Worker，与核心主进程（WebServer）区分
@@ -655,22 +665,45 @@ PRESET_PATH = os.path.join(RESOURCE_PATH, "platforms", "preset.json")
 WEB_SERVER_PATH = os.path.join(PROJECT_ROOT, "Tools", "WebServer")
 WEB_SESSION_TOKEN = os.environ.get("AINIEE_WEB_SESSION_TOKEN", "") or secrets.token_urlsafe(32)
 MCP_AUTH_TOKEN = os.environ.get("AINIEE_MCP_AUTH_TOKEN", "")
-SENSITIVE_API_PREFIXES = (
-    "/api/config",
-    "/api/profiles",
-    "/api/rules_profiles",
-    "/api/queue",
-)
+INTERNAL_API_TOKEN = os.environ.get(INTERNAL_AUTH_ENV, "") or secrets.token_urlsafe(32)
+PUBLIC_API_ROUTES = {
+    ("POST", "/api/session/bootstrap"),
+    ("GET", "/api/version"),
+    ("GET", "/api/system/mode"),
+}
 
 # --- Helper Functions ---
 
 
-def _is_sensitive_api_path(path: str) -> bool:
-    return any(path.startswith(prefix) for prefix in SENSITIVE_API_PREFIXES)
+def _is_api_path(path: str) -> bool:
+    return path == "/api" or path.startswith("/api/")
+
+
+def _is_loopback_bind_host(host: str) -> bool:
+    normalized = str(host or "").strip().lower().strip("[]")
+    if normalized == "localhost" or normalized == "::1":
+        return True
+    try:
+        return normalized.startswith("127.") and all(
+            0 <= int(part) <= 255 for part in normalized.split(".")
+        ) and len(normalized.split(".")) == 4
+    except ValueError:
+        return False
+
+
+def _is_internal_api_path(path: str) -> bool:
+    return path == "/api/internal" or path.startswith("/api/internal/")
+
+
+def _is_public_api_request(request: Request) -> bool:
+    if request.method.upper() == "OPTIONS":
+        return True
+    return (request.method.upper(), request.url.path) in PUBLIC_API_ROUTES
 
 
 def _has_valid_web_session(request: Request) -> bool:
-    return request.cookies.get(WEB_SESSION_COOKIE_NAME, "") == WEB_SESSION_TOKEN
+    token = request.cookies.get(WEB_SESSION_COOKIE_NAME, "")
+    return bool(token) and secrets.compare_digest(token, WEB_SESSION_TOKEN)
 
 
 def _has_valid_mcp_auth(request: Request) -> bool:
@@ -678,23 +711,24 @@ def _has_valid_mcp_auth(request: Request) -> bool:
         return False
     if not MCP_AUTH_TOKEN:
         return False
-    return request.headers.get(MCP_AUTH_HEADER, "") == MCP_AUTH_TOKEN
+    token = request.headers.get(MCP_AUTH_HEADER, "")
+    return bool(token) and secrets.compare_digest(token, MCP_AUTH_TOKEN)
 
 
-def _ensure_sensitive_api_access(request: Request):
-    """
-    Sensitive API routes must come from a browser session cookie or the MCP bridge token.
+def _has_valid_internal_auth(request: Request) -> bool:
+    token = request.headers.get(INTERNAL_AUTH_HEADER, "")
+    return bool(token) and secrets.compare_digest(token, INTERNAL_API_TOKEN)
 
-    This is not meant to be a full user login system; it is a runtime channel gate that
-    prevents bare unauthenticated HTTP requests from bypassing MCP or the Web UI.
-    """
+
+def _ensure_api_access(request: Request) -> None:
+    """Require an authenticated browser session or MCP bridge for protected APIs."""
     if _has_valid_web_session(request) or _has_valid_mcp_auth(request):
         return
 
     raise HTTPException(
         status_code=403,
         detail=(
-            "Sensitive API access requires a valid Web UI session or MCP bridge token. "
+            "API access requires a valid Web UI session or MCP bridge token. "
             "Direct unauthenticated HTTP bypass is not allowed."
         ),
     )
@@ -702,24 +736,28 @@ def _ensure_sensitive_api_access(request: Request):
 
 @app.middleware("http")
 async def web_session_middleware(request: Request, call_next):
-    """
-    Issue a same-origin browser session cookie for the Web UI and guard sensitive API routes.
-    """
-    if request.url.path.startswith("/api/") and _is_sensitive_api_path(request.url.path):
-        try:
-            _ensure_sensitive_api_access(request)
-        except HTTPException as exc:
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    """Guard APIs by default and leave only explicitly public routes unauthenticated."""
+    path = request.url.path
+    if _is_api_path(path) and not _is_public_api_request(request):
+        if _is_internal_api_path(path):
+            if not _has_valid_internal_auth(request):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Internal API access requires a valid worker token."},
+                )
+        else:
+            try:
+                _ensure_api_access(request)
+            except HTTPException as exc:
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={"detail": exc.detail},
+                    headers={AUTH_REQUIRED_HEADER: WEB_SESSION_AUTH_REQUIRED},
+                )
 
     response = await call_next(request)
 
-    if not request.url.path.startswith("/api/"):
-        response.set_cookie(
-            key=WEB_SESSION_COOKIE_NAME,
-            value=WEB_SESSION_TOKEN,
-            httponly=True,
-            samesite="lax",
-        )
+    if not _is_api_path(path):
         content_type = response.headers.get("content-type", "").lower()
         if "text/html" in content_type:
             # WebView may reuse a cached SPA document without contacting the restarted backend.
@@ -733,13 +771,19 @@ async def bootstrap_web_session(request: Request, response: Response):
     """Establish the short-lived browser channel before accessing sensitive APIs."""
     origin = request.headers.get("origin", "").rstrip("/")
     expected_origin = f"{request.url.scheme}://{request.headers.get('host', '')}".rstrip("/")
-    if origin and origin != expected_origin:
+    if (
+        not _is_loopback_bind_host(request.url.hostname or "")
+        or not origin
+        or origin != expected_origin
+    ):
         raise HTTPException(status_code=403, detail="Web UI session bootstrap requires a same-origin request.")
     response.set_cookie(
         key=WEB_SESSION_COOKIE_NAME,
         value=WEB_SESSION_TOKEN,
         httponly=True,
-        samesite="lax",
+        samesite="strict",
+        secure=request.url.scheme == "https",
+        path="/",
     )
 
 def get_config_mode():
@@ -4211,7 +4255,8 @@ async def get_queue(request: Request):
                 "project_type": getattr(task, "project_type", ""),
                 "platform": getattr(task, "platform", ""),
                 "api_url": getattr(task, "api_url", ""),
-                "api_key": getattr(task, "api_key", ""),
+                "api_key": "",
+                "api_key_configured": bool(getattr(task, "api_key", "")),
                 "model": getattr(task, "model", ""),
                 "threads": getattr(task, "threads", None),
                 "retry": getattr(task, "retry", None),
@@ -4579,6 +4624,11 @@ class StoppableServer(uvicorn.Server):
 
 _current_server: Optional[StoppableServer] = None
 
+
+def _publish_internal_worker_environment(internal_api_url: str) -> None:
+    os.environ["AINIEE_INTERNAL_API_URL"] = internal_api_url
+    os.environ[INTERNAL_AUTH_ENV] = INTERNAL_API_TOKEN
+
 def stop_server():
     """Stops the running uvicorn server and any active tasks."""
     global _current_server
@@ -4597,11 +4647,16 @@ def run_server(
 ):
     """Starts the FastAPI server in a separate thread."""
     global SYSTEM_MODE, _current_server
+    if not _is_loopback_bind_host(host):
+        raise ValueError(
+            "Remote WebServer binding is disabled because no remote-user authentication is configured."
+        )
     SYSTEM_MODE = "monitor" if monitor_mode else "full"
     
     # 动态记录 WebServer 的地址，以便子进程上报数据
     task_manager.api_url = f"http://{host}:{port}"
     task_manager.internal_api_url = f"http://127.0.0.1:{port}"
+    _publish_internal_worker_environment(task_manager.internal_api_url)
     
     try:
         # MCP stdio 模式需要绝对安静的 stdout，因此这里允许调用方下调 uvicorn 日志级别。

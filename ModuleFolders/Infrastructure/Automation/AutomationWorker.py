@@ -9,15 +9,25 @@ from ModuleFolders.Base.Base import Base, TUIHandler
 from ModuleFolders.Base.EventManager import EventManager
 from ModuleFolders.Infrastructure.Automation.AutomationProgress import (
     AutomationProgressUI,
+    TASK_SECRETS_ENV,
     TERMINAL_STATUSES,
     read_progress_file,
     reporter_from_env,
 )
+from ModuleFolders.Infrastructure.SensitiveData import restore_sensitive_data
 
 
 def _load_task_config(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as file:
-        return json.load(file)
+        task_config = json.load(file)
+
+    # Credentials arrive through the child-only environment and are removed as
+    # soon as the in-memory task has been reconstructed.
+    raw_secrets = os.environ.pop(TASK_SECRETS_ENV, "")
+    if raw_secrets:
+        secret_overlay = json.loads(raw_secrets)
+        task_config = restore_sensitive_data(task_config, secret_overlay)
+    return task_config
 
 
 def run_worker(task_config_path: str) -> int:

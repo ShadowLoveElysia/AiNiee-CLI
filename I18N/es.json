@@ -1231,7 +1231,7 @@
     "setting_proofread_suggestion_mode_proofread": "Revisión de traducción",
     "setting_proofread_suggestion_mode_annotation": "Anotación al final",
     "setting_proofread_save_raw_responses": "Guardar respuestas originales de corrección AI",
-    "setting_proofread_save_raw_responses_desc": "Guarda el razonamiento y la respuesta completos de cada corrección AI en proofread/AIProofreadLLMResponses.json dentro de la carpeta de salida para depuración. Puede ocupar espacio adicional y está desactivado de forma predeterminada.",
+    "setting_proofread_save_raw_responses_desc": "Guarda el razonamiento y la respuesta completos de cada corrección AI en proofread/AIProofreadLLMResponses.jsonl dentro de la carpeta de salida para depuración. Puede ocupar espacio adicional y está desactivado de forma predeterminada.",
     "proofread_raw_response_save_failed": "No se pudo guardar el registro de respuestas originales, pero la corrección continuará: {}",
     "prompt_select_action": "Selecciona acción:",
     "option_save_without_translation": "Guardar directamente (sin traducción)",

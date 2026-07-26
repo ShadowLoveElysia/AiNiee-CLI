@@ -4,6 +4,7 @@ import sys
 import time
 
 from rich.console import Console
+from Tools.MCPServer.security import INTERNAL_AUTH_ENV, INTERNAL_AUTH_HEADER
 
 
 class WebLogger:
@@ -11,19 +12,20 @@ class WebLogger:
         self.last_stats_time = 0
         self.stream = stream or sys.__stdout__
         self.show_detailed = show_detailed
-        self.internal_api_url = os.environ.get("AINIEE_INTERNAL_API_URL")
         self.current_source = ""
         self._last_result_time = 0
 
     def _push_to_web(self, source, translation):
-        if not self.internal_api_url:
+        internal_api_url = os.environ.get("AINIEE_INTERNAL_API_URL")
+        if not internal_api_url:
             return
         try:
             import httpx
 
             httpx.post(
-                f"{self.internal_api_url}/api/internal/update_comparison",
+                f"{internal_api_url}/api/internal/update_comparison",
                 json={"source": source, "translation": translation},
+                headers={INTERNAL_AUTH_HEADER: os.environ.get(INTERNAL_AUTH_ENV, "")},
                 timeout=1.0,
             )
         except Exception:

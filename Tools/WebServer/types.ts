@@ -48,6 +48,7 @@ export interface QueueTaskItem {
   platform?: string;
   api_url?: string;
   api_key?: string;
+  api_key_configured?: boolean;
   model?: string;
 
   // Performance Overrides
