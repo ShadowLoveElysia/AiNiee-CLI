@@ -10,22 +10,15 @@
 
 [简体中文](README.md) | [English](README_EN.md) | [繁體中文](Docs/README_zh_CNTW.md) | [日本語](Docs/README_JA.md) | [한국어](Docs/README_KO.md) | [Русский](Docs/README_RU.md) | [Español](Docs/README_ES.md)
 
-**AiNiee-Next** is an engineering-focused refactor of the [AiNiee](https://github.com/NEKOparapa/AiNiee) core logic, designed for command-line environments.
+**AiNiee-Next** is a command-line edition built on the core translation logic of [AiNiee](https://github.com/NEKOparapa/AiNiee). It uses **uv** to manage the Python environment and includes extensive improvements for long-running jobs, batch processing, server deployments, and automation.
 
-This project introduces **uv**, a modern Python package manager, and implements significant stability optimizations for the underlying runtime. By taking control of IO streams and exception handling, we have built a robust TUI environment perfect for long-running tasks, headless server deployments, and automated workflows.
+CLI/TUI is the primary interface, with a Web dashboard, task queues, plugins, and an MCP server also available. The project is suitable for personal translation, long-form content, and unattended batch jobs.
 
 ---
 
-## Built-in Smart Diagnostics and Issue Feedback Assistance
+## Diagnostics and Issue Reporting
 
-AiNiee-Next includes built-in error diagnostics and feedback assistance, so you can use it with confidence: if a task fails, you will not be left with only a cryptic traceback or logs with no clear next step. The system collects context such as the error stack, runtime environment, current platform and model, and recent operation flow, then uses rule-based diagnostics and optional LLM analysis to help determine whether the issue is more likely caused by the API, network, configuration, environment, or the project code itself.
-
-If the diagnostics point to a suspected code issue, the program can also prepare a structured GitHub Issue with the error description, environment information, key traceback, initial analysis, and useful clues for debugging. You do not need to spend extra effort writing the report or interpreting complex errors yourself; the system helps turn the problem into a format that developers can understand, reproduce, and resolve more quickly.
-
-- **Clearer next steps**: Helps distinguish configuration issues, environment issues, API issues, network issues, and suspected code defects
-- **Easier feedback**: Automatically organizes Issue content with environment details, version information, traceback, and analysis results
-- **Lower communication cost**: Reduces repeated follow-up questions between users and developers
-- **Faster troubleshooting**: Turns problem reports into debugging material that is easier for developers to act on
+When a task fails, the program collects the stack trace, runtime environment, API provider, model, and recent operations. Built-in rules and optional LLM analysis then help determine whether the problem comes from the API, network, configuration, runtime environment, or project code. Suspected code issues can also be organized into a GitHub Issue with the error description, environment details, key traceback, and initial analysis.
 
 ---
 
@@ -45,61 +38,15 @@ The screenshot below demonstrates a ~20,000 line file being translated in approx
 
 ## Key Features
 
-### Runtime Stability
-- **IO Stream Cleaning**: Refactored Stdout/Stderr capture logic, blocking redundant noise from dependencies, preventing TUI tearing or crashes
-- **Smart Error Recovery**: Built-in exception interception and auto-retry mechanism with checkpoint resume, ideal for long-running tasks
-- **Cross-Platform Compatible**: Supports Windows / Linux / macOS / Android (Termux), headless server friendly
-
-### Intelligent Format Processing
-- **Fully Automated Conversion**: Supports "Identify - Convert - Translate - Restore" workflow for .mobi / .azw3 / .kepub / .fb2 formats
-- **Native Multi-Format Support**: Epub, Docx, Txt, Srt, Ass, Vtt, Lrc, Json, Po, Paratranz and 20+ formats
-- **Calibre Middleware Integration**: Automatically invokes Calibre for complex ebook formats
-
-### Live Mission Control Center
-- **Dynamic Concurrency**: Adjust concurrent threads in real-time via `+` / `-` keys
-- **API Key Hot-Swap**: Force API Key rotation via `K` key to handle rate limits
-- **Mid-Task Monitoring**: Launch WebServer and auto-open browser via `M` key
-- **System Status Monitoring**: Real-time status bar with color-coded border indicators
-- **Cost & Time Estimation**: Auto-estimate token consumption, API costs, and completion time before task start
-
-### Multi-Profile System
-- **Profile Isolation**: Create, clone, and switch between multiple configuration sets
-- **Scenario-Based Configs**: Separate "Quick Translation" and "Fine Polish" workflows
-- **Hot Reload**: Configuration changes take effect without restart
-
-### Plugin Architecture
-- **Modular Extensions**: Safely extend functionality without modifying core code
-- **Built-in RAG Plugin**: Auto-retrieve historical translations for context reference, improving terminology and style consistency
-- **Translation Checker Plugin**: Auto-detect missing translations, errors, and format anomalies
-- **Centralized Management**: Plugin management available in both CLI menu and Web UI
-
-### Intelligent Task Queue
-- **Batch Task Configuration**: Pre-configure multiple tasks with different files or translation strategies
-- **Dynamic Queue Scheduling**: Drag-and-drop ordering (Web) and keyboard reordering (TUI)
-- **Hot Task Modification**: Edit pending task parameters while queue is running
-- **Auto Sequential Execution**: Optimized for large-scale translation workflows
-
-### Context Caching
-- **Multi-Platform Support**: Anthropic / Google / Amazon Bedrock context caching
-- **Cost Optimization**: Cache system prompts and glossaries to significantly reduce API costs
-- **Smart Fallback**: Auto-detect API compatibility, disable and notify when unsupported
-
-### Thinking Mode Enhancement
-- **Full Platform Compatibility**: Supports all major online API platforms and third-party proxies
-- **Smart Parameter Configuration**: Different compatibility hints for online APIs and local models
-- **Deep Reasoning Support**: Supports deep thinking mode for DeepSeek R1, Claude 3.5, and similar models
-
-### API Failover
-- **Multi-API Pool Management**: Configure multiple backup APIs
-- **Auto Switching**: Automatically switch to backup API when primary fails
-- **Threshold Control**: Configurable failover trigger threshold
-
-### High Concurrency Performance
-- **Async Request Mode**: aiohttp-based async I/O, breaks thread pool bottleneck, supports 100+ concurrency
-- **Smart Error Classification**: Distinguishes "hard errors" (format/auth issues) from "soft errors" (rate limit/timeout) - hard errors don't retry, soft errors wait smartly
-- **Provider Fingerprinting**: Auto-detects and records API feature support, silent degradation on next startup
-- **Semaphore Protection**: Protects local system resources (file descriptors, ports) under high concurrency
-- **Auto Suggestion**: Automatically suggests enabling async mode when concurrency ≥15 for better performance
+- **Reliable execution and recovery**: Cleans up low-level I/O output to keep dependency logs from disrupting the TUI, with exception handling, automatic retries, and checkpoint resume for long-running jobs.
+- **Cross-platform support**: Runs on Windows, Linux, macOS, and Android (Termux), including headless server environments.
+- **Broad format support**: Handles more than 20 formats, including Epub, Docx, Txt, Srt, Ass, Vtt, Lrc, Json, Po, and Paratranz. Calibre integration also supports ebooks such as `.mobi`, `.azw3`, `.kepub`, and `.fb2`.
+- **Task and configuration management**: Adjust concurrency and rotate API keys during a run, open Web monitoring, and review task status, cost, and completion-time estimates. Multiple profiles, hot-reloaded settings, and reorderable batch queues are supported; pending tasks can be edited while the queue runs and are executed automatically in order.
+- **Plugins and translation assistance**: Extend the program through centrally managed plugins, use previous translations through RAG, and check for missing translations, translation errors, and formatting problems.
+- **Context caching**: Supports context caching for Anthropic, Google, and Amazon Bedrock, including system prompts and glossaries. The feature is disabled with a notice when the current API is incompatible.
+- **Model and API support**: Works with major online APIs, third-party gateways, and local models, with relevant parameter guidance for each interface type. Reasoning models such as DeepSeek R1 and Claude 3.5 are supported, along with multiple API endpoints, automatic failover, and configurable failover thresholds.
+- **High-concurrency processing**: The aiohttp-based async mode supports more than 100 concurrent requests, distinguishes permanent errors from temporary failures, records provider compatibility, and protects system resources such as file descriptors and ports. At 15 or more concurrent requests, the program suggests enabling async mode.
+- **Web, MCP, and MangaCore**: The Web dashboard provides visual task management, MCP offers controlled access for LLM clients, and MangaCore supports automatic manga batch processing and Web-based editing.
 
 ---
 

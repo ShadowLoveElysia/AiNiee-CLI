@@ -10,9 +10,9 @@
 
 [简体中文](../README.md) | [English](../README_EN.md) | [繁體中文](README_zh_CNTW.md) | [日本語](README_JA.md) | [한국어](README_KO.md) | [Русский](README_RU.md) | [Español](README_ES.md)
 
-**AiNiee-Next** es una versión de línea de comandos basada en una refactorización de ingeniería de la lógica central de [AiNiee](https://github.com/NEKOparapa/AiNiee). Está pensada para tareas largas, servidores, flujos automatizados y una experiencia TUI más estable.
+**AiNiee-Next** es una versión de línea de comandos basada en las funciones principales de traducción de [AiNiee](https://github.com/NEKOparapa/AiNiee). Utiliza **uv** para gestionar el entorno de Python e incluye mejoras para tareas largas, procesamiento por lotes, servidores y automatización.
 
-El proyecto usa **uv** como gestor moderno de paquetes de Python y refuerza el manejo de flujos IO, excepciones, recuperación de tareas, diagnóstico de errores y panel Web.
+La interfaz principal es CLI/TUI, pero también ofrece un panel Web, una cola de tareas, plugins y un servicio MCP. Es adecuada para traducciones personales, textos extensos y trabajos por lotes de larga duración.
 
 > Lo sentimos mucho: el desarrollador no habla español, por lo que algunos prompts del sistema pueden requerir que los escriba o ajuste usted mismo. El desarrollador no tiene por ahora capacidad para mantener prompts en varios idiomas. Si desea colaborar, los PR al proyecto son bienvenidos.
 
@@ -20,16 +20,14 @@ El proyecto usa **uv** como gestor moderno de paquetes de Python y refuerza el m
 
 ## Funciones principales
 
-- **Entorno CLI / TUI estable**: controla stdout y stderr para reducir problemas visuales causados por logs de dependencias.
-- **Diagnóstico inteligente de errores**: recopila traceback, entorno, plataforma, modelo y acciones recientes para distinguir problemas de API, red, configuración, entorno o código.
-- **Soporte multiformato**: Epub, Docx, Txt, Srt, Ass, Vtt, Lrc, Json, Po, Paratranz y más de 20 formatos.
-- **Flujo para ebooks**: integración con Calibre para manejar `.mobi`, `.azw3`, `.kepub`, `.fb2` y otros formatos complejos.
-- **Alto rendimiento concurrente**: ajuste de hilos durante la ejecución, rotación de API Key, modo asíncrono y detección de capacidades del Provider.
-- **Sistema de Profile**: permite crear, clonar y cambiar configuraciones para distintos escenarios.
-- **Panel Web**: gestión de progreso, Profile, glosario, cola, plugins y parte de las funciones de MangaCore.
-- **Servicio MCP**: clientes LLM compatibles con MCP pueden usar AiNiee-Next mediante herramientas controladas.
-- **Arquitectura de plugins**: soporte para RAG, revisión de traducción y otras extensiones.
-- **MangaCore**: flujo automático por lotes y edición Web para traducción de manga.
+- **Ejecución estable y recuperación**: filtra los flujos de E/S para evitar que los logs innecesarios interfieran con la TUI, e incluye gestión de excepciones, reintentos automáticos y reanudación desde el último punto. Funciona en Windows, Linux, macOS, Android (Termux) y servidores sin interfaz gráfica (Headless).
+- **Diagnóstico de errores**: recopila traceback, entorno, API, modelo y acciones recientes; después usa reglas internas y análisis LLM opcional para localizar la causa. Los posibles errores de código se pueden organizar como un GitHub Issue.
+- **Soporte multiformato**: admite Epub, Docx, Txt, Srt, Ass, Vtt, Lrc, Json, Po, Paratranz y más de 20 formatos. La integración con Calibre también permite procesar ebooks como `.mobi`, `.azw3`, `.kepub` y `.fb2`.
+- **Gestión de tareas y ajustes**: permite cambiar la concurrencia, rotar API Key, abrir el monitor Web y consultar el estado, el coste y el tiempo estimado de finalización. También ofrece varios perfiles (Profile), recarga de configuración y colas por lotes: las tareas pendientes se pueden modificar durante la ejecución y se procesan automáticamente en orden.
+- **Plugins y caché**: permite ampliar funciones mediante plugins gestionados desde un mismo lugar, consultar traducciones anteriores mediante RAG y revisar traducciones. Anthropic, Google y Amazon Bedrock permiten almacenar en caché los prompts del sistema y los glosarios; si una API no es compatible, la función se desactiva y se muestra un aviso.
+- **Modelos y API**: funciona con las principales API en línea, servicios intermediarios de terceros y modelos locales, y muestra indicaciones de parámetros según el tipo de interfaz. Admite modelos de razonamiento como DeepSeek R1 y Claude 3.5, además del cambio automático entre varias API y un umbral de conmutación configurable.
+- **Alta concurrencia**: el modo asíncrono basado en aiohttp admite más de 100 solicitudes simultáneas, distingue los errores que no deben reintentarse de los fallos temporales, registra la compatibilidad de cada proveedor de API y protege descriptores de archivo, puertos y otros recursos. Cuando la concurrencia llega a 15, recomienda activar el modo asíncrono.
+- **Web, MCP y MangaCore**: el panel Web gestiona tareas, ajustes, colas y plugins; MCP permite que los clientes LLM accedan al proyecto de forma controlada; MangaCore ofrece procesamiento automático de manga por lotes y edición Web.
 
 ---
 

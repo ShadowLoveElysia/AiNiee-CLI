@@ -10,24 +10,22 @@
 
 [簡體中文](../README.md) | [English](../README_EN.md) | [繁體中文](README_zh_CNTW.md) | [日本語](README_JA.md) | [한국어](README_KO.md) | [Русский](README_RU.md) | [Español](README_ES.md)
 
-**AiNiee-Next** 是針對 [AiNiee](https://github.com/NEKOparapa/AiNiee) 核心邏輯進行工程化重構的命令列版本，重點是長時間執行、伺服器部署、自動化流程，以及更穩定的 TUI 操作體驗。
+**AiNiee-Next** 是以 [AiNiee](https://github.com/NEKOparapa/AiNiee) 核心翻譯邏輯為基礎開發的命令列版本。專案使用 **uv** 管理 Python 環境，並針對長時間執行、批次任務、伺服器部署與自動化使用做了許多改進。
 
-本專案使用現代 Python 套件管理工具 **uv** 管理執行環境，並對 IO 串流、例外處理、任務恢復、錯誤診斷與 Web 控制面板做了大量穩定性強化。
+專案以 CLI/TUI 為主要操作介面，同時提供 Web 控制面板、任務佇列、外掛系統與 MCP 服務，適合個人翻譯、長篇內容處理及需要長時間執行的批次任務。
 
 ---
 
 ## 主要特色
 
-- **穩定的 CLI / TUI 執行環境**：接管標準輸出與錯誤輸出，降低第三方套件雜訊造成的介面錯亂。
-- **智慧錯誤診斷**：收集 traceback、平台、模型、最近操作等資訊，協助判斷問題來自 API、網路、設定、環境或程式本身。
-- **多格式翻譯**：支援 Epub、Docx、Txt、Srt、Ass、Vtt、Lrc、Json、Po、Paratranz 等多種格式。
-- **電子書轉換流程**：可搭配 Calibre 處理 `.mobi`、`.azw3`、`.kepub`、`.fb2` 等格式。
-- **高併發翻譯**：支援即時調整執行緒數、API Key 輪換、非同步請求模式與 Provider 能力偵測。
-- **多設定檔系統**：可建立、複製、切換不同 Profile，分別管理快速翻譯、精修潤色等場景。
-- **Web 控制面板**：提供任務監看、設定管理、佇列管理、術語表、外掛管理等功能。
-- **MCP 服務**：可讓支援 MCP 的 LLM 客戶端透過受控工具操作 AiNiee-Next，而不是直接呼叫 Web API。
-- **外掛架構**：支援 RAG、翻譯檢查等功能擴充。
-- **漫畫處理流程**：提供 MangaCore 自動跑批與 Web 編輯流程，用於漫畫翻譯預處理與成品輸出。
+- **穩定執行與錯誤復原**：過濾底層 I/O 輸出，減少多餘日誌對 TUI 的干擾，並支援例外攔截、自動重試與斷點續傳；可在 Windows、Linux、macOS、Android（Termux）及 Headless 伺服器環境執行。
+- **智慧診斷**：收集 traceback、執行環境、API 平台、模型與最近操作，搭配內建規則及可選的 LLM 分析判斷問題來源，並可整理成便於回報的 GitHub Issue。
+- **多格式翻譯**：支援 Epub、Docx、Txt、Srt、Ass、Vtt、Lrc、Json、Po、Paratranz 等 20 多種格式，也可搭配 Calibre 處理 `.mobi`、`.azw3`、`.kepub`、`.fb2` 等電子書。
+- **任務與設定管理**：支援執行中調整併發數、切換 API Key、開啟 Web 監看、查看任務狀態以及費用與完成時間預估，並提供多 Profile、設定熱重載和可調整順序的批次任務佇列；佇列執行時也能修改待處理任務，並會依序自動執行。
+- **外掛與快取**：可透過集中管理的外掛擴充功能，並提供 RAG 歷史譯文參考與翻譯檢查；Anthropic、Google、Amazon Bedrock 可快取系統提示詞與術語表，API 不相容時會自動停用並提示。
+- **模型與 API 支援**：相容主流線上 API、第三方 API 轉接服務及本機模型，會依介面類型提供相應的參數提示，支援 DeepSeek R1、Claude 3.5 等推理模型，也可設定多組 API 自動故障轉移及觸發門檻。
+- **高併發處理**：aiohttp 非同步模式可同時處理超過 100 個請求，區分不應重試的錯誤與暫時性錯誤、記錄 API 服務商相容性，並保護檔案描述元與連接埠等系統資源；併發數達到 15 時會提示啟用非同步模式。
+- **Web、MCP 與 MangaCore**：Web 控制面板可管理任務、設定、佇列與外掛；MCP 讓 LLM 客戶端透過受控工具操作專案；MangaCore 提供漫畫自動批次處理與 Web 編輯流程。
 
 ---
 
