@@ -228,6 +228,15 @@ class TaskUI:
 
         return has_red_style or any(word in text for word in err_words)
 
+    @staticmethod
+    def _is_explicit_critical_log(log_item: Text) -> bool:
+        """Return True only for structured crash output, not translated content."""
+        text = log_item.plain.lower()
+        marker = re.compile(
+            r"(?:^|\]\s*)(?:traceback \(most recent call last\):|panic(?:\s|:))"
+        )
+        return marker.search(text) is not None
+
     def refresh_logs(self):
         """Renders the log panel according to the current filter."""
         with self._lock:
@@ -351,7 +360,7 @@ class TaskUI:
                         self.current_status_color = 'red'
                         self.current_border_color = 'red'
 
-                if "traceback" in lower_msg or "panic" in lower_msg:
+                if self._is_explicit_critical_log(new_log):
                     self.parent_cli._is_critical_failure = True
                     if not getattr(self.parent_cli, "_last_crash_msg", None):
                         self.parent_cli._last_crash_msg = clean_msg

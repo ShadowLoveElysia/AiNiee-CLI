@@ -1,3 +1,6 @@
+import threading
+
+
 class EventManager:
 
     # 单一实例
@@ -6,6 +9,7 @@ class EventManager:
     def __init__(self):
         # 事件列表
         self.event_callbacks = {}
+        self._callbacks_lock = threading.RLock()
 
     @classmethod
     def get_singleton(cls):
@@ -15,8 +19,10 @@ class EventManager:
 
     # 处理事件
     def process_event(self, event: int, data: dict):
-        if event in self.event_callbacks:
-            for handler in self.event_callbacks[event]:
+        with self._callbacks_lock:
+            handlers = tuple(self.event_callbacks.get(event, ()))
+        if handlers:
+            for handler in handlers:
                 try:
                     handler(event, data)
                 except Exception as e:
@@ -30,15 +36,17 @@ class EventManager:
 
     # 订阅事件
     def subscribe(self, event: int, handler: callable):
-        if event not in self.event_callbacks:
-            self.event_callbacks[event] = []
-        if handler not in self.event_callbacks[event]:
-            self.event_callbacks[event].append(handler)
+        with self._callbacks_lock:
+            if event not in self.event_callbacks:
+                self.event_callbacks[event] = []
+            if handler not in self.event_callbacks[event]:
+                self.event_callbacks[event].append(handler)
 
     # 取消订阅事件
     def unsubscribe(self, event: int, handler: callable):
-        if event in self.event_callbacks:
-            try:
-                self.event_callbacks[event].remove(handler)
-            except ValueError:
-                pass
+        with self._callbacks_lock:
+            if event in self.event_callbacks:
+                try:
+                    self.event_callbacks[event].remove(handler)
+                except ValueError:
+                    pass

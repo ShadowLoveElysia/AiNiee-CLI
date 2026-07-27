@@ -372,6 +372,68 @@ def save_effective_config(
         return root_config
 
 
+def set_active_platform_thinking(platform_tag: str, think_switch: bool) -> dict:
+    """Atomically update one platform's thinking switch in the active settings profile."""
+    if not isinstance(platform_tag, str) or not platform_tag.strip():
+        raise ValueError("platform_tag must be a non-empty string")
+    if type(think_switch) is not bool:
+        raise ValueError("think_switch must be a boolean")
+
+    normalized_tag = platform_tag.strip()
+    with _CONFIG_LOCK:
+        root_config = load_root_config()
+        effective = load_effective_config(root_config=root_config, create_missing=False)
+        active_profile = sanitize_profile_name(
+            effective.get("active_profile") or get_active_profile_name(root_config)
+        )
+
+        effective_platforms = effective.get("platforms")
+        platform_config = (
+            effective_platforms.get(normalized_tag)
+            if isinstance(effective_platforms, dict)
+            else None
+        )
+        if not isinstance(platform_config, dict):
+            raise KeyError(normalized_tag)
+
+        profile_path, active_profile = resolve_profile_path(PROFILES_PATH, active_profile)
+        profile_config = load_json_file(profile_path, {}) if os.path.exists(profile_path) else {}
+
+        profile_platforms = profile_config.get("platforms")
+        if profile_platforms is None:
+            profile_platforms = {}
+        elif not isinstance(profile_platforms, dict):
+            raise ValueError("The active profile has an invalid platforms mapping")
+
+        stored_platform = profile_platforms.get(normalized_tag)
+        if stored_platform is None:
+            stored_platform = {}
+        elif not isinstance(stored_platform, dict):
+            raise ValueError("The active profile has an invalid platform configuration")
+
+        stored_platform["think_switch"] = think_switch
+        profile_platforms[normalized_tag] = stored_platform
+        profile_config["platforms"] = profile_platforms
+
+        api_settings = effective.get("api_settings")
+        translate_platform = (
+            str(api_settings.get("translate") or "").strip()
+            if isinstance(api_settings, dict)
+            else ""
+        )
+        target_platform = str(effective.get("target_platform") or "").strip()
+        if normalized_tag in {target_platform, translate_platform}:
+            profile_config["think_switch"] = think_switch
+
+        atomic_write_json(profile_path, profile_config)
+        return {
+            "active_profile": active_profile,
+            "platform_tag": normalized_tag,
+            "think_switch": think_switch,
+            "think_depth": platform_config.get("think_depth"),
+        }
+
+
 def save_setting_value(key: str, value) -> None:
     config = load_effective_config(create_missing=True)
     config[key] = value

@@ -10,8 +10,14 @@ import subprocess
 import time
 import collections
 import locale
+import mimetypes
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal
+
+# Python on Windows may map JavaScript files to ``text/plain``. Browsers
+# reject that MIME type for ``<script type="module">`` resources.
+mimetypes.add_type("application/javascript", ".js", strict=True)
+mimetypes.add_type("application/javascript", ".mjs", strict=True)
 
 # --- Pre-emptive Import for FastAPI & Pydantic ---
 try:
@@ -19,7 +25,7 @@ try:
     from fastapi import FastAPI, HTTPException, Body, File, UploadFile, Response, BackgroundTasks, Query, Request, APIRouter
     from fastapi.staticfiles import StaticFiles
     from fastapi.responses import FileResponse, JSONResponse
-    from pydantic import BaseModel
+    from pydantic import BaseModel, StrictBool
 except ImportError:
     # This error will be caught and handled in ainiee_cli.py
     raise ImportError("Required packages are missing. Please run 'uv add fastapi uvicorn[standard] pydantic python-multipart'.,Or run 'uv sync'")
@@ -60,6 +66,7 @@ from ModuleFolders.Infrastructure.TaskConfig.ConfigProfileService import (
     normalize_rules_payload,
     resolve_profile_path,
     save_effective_config,
+    set_active_platform_thinking,
     save_root_config,
     save_rule_value,
     save_setting_value,
@@ -567,7 +574,7 @@ class DeleteFileRequest(BaseModel):
     files: List[str]
 
 class QueueTaskItem(BaseModel):
-    task_type: int
+    task_type: Literal[1000, 2000, 4000]
     input_path: str
     output_path: Optional[str] = None
     profile: Optional[str] = None
@@ -660,6 +667,7 @@ SENSITIVE_API_PREFIXES = (
     "/api/profiles",
     "/api/rules_profiles",
     "/api/queue",
+    "/api/platforms",
 )
 
 # --- Helper Functions ---
@@ -2751,6 +2759,31 @@ async def delete_profile(request: ProfileDeleteRequest):
         raise HTTPException(status_code=500, detail=f"Failed to delete profile: {e}")
 
 # --- Task API Endpoints ---
+
+class PlatformThinkingRequest(BaseModel):
+    platform: str
+    think_switch: StrictBool
+
+    class Config:
+        extra = "forbid"
+
+
+@app.post("/api/platforms/thinking")
+async def update_platform_thinking(payload: PlatformThinkingRequest):
+    global _config_cache
+
+    try:
+        result = set_active_platform_thinking(payload.platform, payload.think_switch)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown platform")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to update platform thinking setting")
+
+    _config_cache.clear()
+    return result
+
 
 class PlatformCreateRequest(BaseModel):
     name: str

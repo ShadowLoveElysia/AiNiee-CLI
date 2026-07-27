@@ -1,12 +1,25 @@
 import json
 import os
 import re
+import sys
 import time
 
 from ModuleFolders.Infrastructure.Cache.CacheItem import TranslationStatus
 from ModuleFolders.Infrastructure.Cache.CacheProject import CacheProject
 from ModuleFolders.Domain.PromptBuilder.PromptBuilder import PromptBuilder
 from ..PluginBase import PluginBase
+
+
+def _safe_console_print(message):
+    """Print reports without letting a legacy console encoding fail the task."""
+    text = str(message)
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        safe_text = text.encode(encoding, errors="backslashreplace").decode(encoding)
+        print(safe_text)
+
 
 class TranslationCheckPlugin(PluginBase):
     def __init__(self):
@@ -37,9 +50,9 @@ class TranslationCheckPlugin(PluginBase):
                     file_patterns = [item["regex"] for item in data if isinstance(item, dict) and "regex" in item]
                     patterns.extend(file_patterns)
             except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
-                print(f"[WARNING][TranslationCheckPlugin] 加载正则文件 '{regex_file_path}' 失败: {e}")
+                _safe_console_print(f"[WARNING][TranslationCheckPlugin] 加载正则文件 '{regex_file_path}' 失败: {e}")
         else:
-             print(f"[WARNING][TranslationCheckPlugin] 正则文件未找到: '{regex_file_path}'")
+             _safe_console_print(f"[WARNING][TranslationCheckPlugin] 正则文件未找到: '{regex_file_path}'")
 
 
         # 合并禁翻表数据
@@ -52,7 +65,7 @@ class TranslationCheckPlugin(PluginBase):
                             re.compile(regex) # 尝试编译，验证正则有效性
                             exclusion_patterns.append(regex)
                         except re.error as e:
-                            print(f"[WARNING][TranslationCheckPlugin] 禁翻表中的无效正则表达式: '{regex}', 错误: {e}")
+                            _safe_console_print(f"[WARNING][TranslationCheckPlugin] 禁翻表中的无效正则表达式: '{regex}', 错误: {e}")
                     elif markers := item.get("markers"): # 使用 markers 字段
                         exclusion_patterns.append(re.escape(markers)) # 转义 markers 并添加
             patterns.extend(exclusion_patterns)
@@ -136,10 +149,10 @@ class TranslationCheckPlugin(PluginBase):
                 f"{performance_level}",
                 "=" * 60 + "\n"
             ]
-            print("\n".join(project_report)) # 项目报告直接输出到控制台
+            _safe_console_print("\n".join(project_report)) # 项目报告直接输出到控制台
             project_report_logged = True # 标记已输出
         else:
-            print("[WARNING][TranslationCheckPlugin] 项目报告条目缺少有效的 'start_time'。")
+            _safe_console_print("[WARNING][TranslationCheckPlugin] 项目报告条目缺少有效的 'start_time'。")
 
         # 再处理文本检查条目
         for file in cache_data.files.values():
@@ -256,7 +269,7 @@ class TranslationCheckPlugin(PluginBase):
                  summary_messages.append("ℹ️ 未检查任何文本条目。")
 
             summary_messages.append("=" * 60 + "\n")
-            print("\n".join(summary_messages)) # 控制台输出总结信息
+            _safe_console_print("\n".join(summary_messages)) # 控制台输出总结信息
 
 
         # 写入结构化错误信息到 JSON 文件
@@ -264,12 +277,12 @@ class TranslationCheckPlugin(PluginBase):
             try:
                 with open(json_error_filepath, 'w', encoding='utf-8') as json_file:
                     json.dump(error_entries, json_file, indent=4, ensure_ascii=False) # 缩进和中文支持
-                print(f"[INFO][TranslationCheckPlugin] {len(error_entries)} 个错误条目的详细信息已保存到: {json_error_filepath}")
+                _safe_console_print(f"[INFO][TranslationCheckPlugin] {len(error_entries)} 个错误条目的详细信息已保存到: {json_error_filepath}")
             except IOError as e:
-                print(f"[ERROR][TranslationCheckPlugin] 无法写入错误日志文件 '{json_error_filepath}': {e}")
+                _safe_console_print(f"[ERROR][TranslationCheckPlugin] 无法写入错误日志文件 '{json_error_filepath}': {e}")
 
         elif total_error_count == 0 and any(cache_data.items_iter()):  # 上面遍历了所有items，所以只要items不为空就能确保有文本条目被检查过
-            print("[INFO][TranslationCheckPlugin] 所有已检查条目均无错误，未生成错误日志文件。")
+            _safe_console_print("[INFO][TranslationCheckPlugin] 所有已检查条目均无错误，未生成错误日志文件。")
         # 如果没有文本条目被检查，则不输出此信息
 
 

@@ -77,6 +77,10 @@ CATEGORY_DESCRIPTIONS = {
 
 EXACT_ROUTE_PURPOSES = {
     "/api/config": "Read or save the active profile configuration.",
+    "/api/platforms/thinking": (
+        "Update one existing platform's thinking switch without writing the full "
+        "redacted configuration."
+    ),
     "/api/version": "Read the current application version.",
     "/api/system/mode": "Read the current runtime mode.",
     "/api/profiles": "List available profiles.",
@@ -593,6 +597,10 @@ def _build_route_notes(path: str) -> List[str]:
 
     if path == "/api/config":
         notes.append("Secrets are redacted for MCP reads. Saving a non-secret change preserves existing stored secrets.")
+    if path == "/api/platforms/thinking":
+        notes.append(
+            "Only the selected platform's think_switch is updated; stored secrets and unrelated settings are preserved."
+        )
     if path.startswith("/api/queue"):
         notes.append("Queue API keys are redacted for MCP reads.")
     if path == "/api/queue/raw":
@@ -618,13 +626,15 @@ def _build_example_args(route: Dict[str, str]) -> Dict[str, Any]:
 def _build_example_body(path: str) -> Any:
     if path == "/api/config":
         return {"target_platform": "openai", "model": "gpt-4o-mini"}
+    if path == "/api/platforms/thinking":
+        return {"platform": "deepseek", "think_switch": False}
     if path == "/api/profiles/switch":
         return {"profile": "default"}
     if path == "/api/rules_profiles/switch":
         return {"profile": "default"}
     if path == "/api/queue":
         return {
-            "task_type": 1,
+            "task_type": 1000,
             "input_path": "/abs/path/input.txt",
             "output_path": "/abs/path/output",
             "platform": "openai",
