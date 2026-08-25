@@ -249,11 +249,11 @@ class TaskQueueMenu:
             f"{self.i18n.get('label_url_override')}{self.i18n.get('tip_follow_profile')}",
             default=task.api_url or "",
         ) or None
-        task.api_key = Prompt.ask(
-            f"{self.i18n.get('label_key_override')}{self.i18n.get('tip_follow_profile')}",
-            password=True,
-            default=task.api_key or "",
-        ) or None
+        task.api_key = None
+        console.print(
+            "[dim]Queue files do not store API keys. Use a profile, or provide a "
+            "temporary key when running a task directly.[/dim]"
+        )
 
         task.threads = IntPrompt.ask(
             f"{self.i18n.get('label_threads_override')}{self.i18n.get('tip_follow_profile')}",

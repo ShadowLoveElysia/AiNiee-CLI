@@ -1,4 +1,4 @@
-import { AppConfig, TaskPayload, TaskStats, LogEntry, ChartDataPoint } from '../types';
+import { AppConfig, TaskPayload, TaskStats, LogEntry, ChartDataPoint, QueueTaskItem } from '../types';
 import type { MangaBrushStrokePayload } from '../components/manga/shared';
 import { MangaDeleteRuntimeValidationHistoryResult, MangaExportFormat, MangaExportResult, MangaFontCatalogEntry, MangaJob, MangaModelManagerManifest, MangaModelPackageStatus, MangaOpenProjectSummary, MangaOperationResult, MangaPageDetail, MangaPageQualityGate, MangaProjectSummary, MangaPsdExportOptions, MangaRuntimeReadinessReport, MangaRuntimeStatusSummary, MangaRuntimeValidationDiffResult, MangaRuntimeValidationHistoryItem, MangaRuntimeValidationResult, MangaSceneSummary } from '../types/manga';
 
@@ -1099,6 +1099,7 @@ export const DataService = {
             if (!res.ok) throw new Error('Failed to stop task');
         } catch (error) {
             console.error("API Error: stopTask", error);
+            throw error;
         }
     },
 
@@ -1197,24 +1198,26 @@ export const DataService = {
 
     // --- Task Queue ---
 
-    async getQueue(): Promise<any[]> {
+    async getQueue(): Promise<QueueTaskItem[]> {
         const res = await fetch(`${API_BASE}/queue`);
+        if (!res.ok) throw new Error('Failed to load queue');
         return await res.json();
     },
 
-    async addToQueue(item: any): Promise<void> {
-        await fetch(`${API_BASE}/queue`, {
+    async addToQueue(item: Partial<QueueTaskItem>): Promise<void> {
+        const res = await fetch(`${API_BASE}/queue`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(item)
         });
+        if (!res.ok) throw new Error('Failed to add task');
     },
 
     async removeFromQueue(index: number): Promise<void> {
         await fetch(`${API_BASE}/queue/${index}`, { method: 'DELETE' });
     },
 
-    async updateQueueItem(index: number, item: any): Promise<void> {
+    async updateQueueItem(index: number, item: Partial<QueueTaskItem>): Promise<void> {
         const res = await fetch(`${API_BASE}/queue/${index}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },

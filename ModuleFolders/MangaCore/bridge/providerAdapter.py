@@ -301,6 +301,13 @@ _STAGE_RUNTIME_DEVICE_KEYS = {
     "ocr": "manga_ocr_device",
     "inpaint": "manga_inpaint_device",
 }
+_CV2_REQUIRED_ATTRIBUTES = (
+    "imread",
+    "IMREAD_COLOR",
+    "cvtColor",
+    "connectedComponentsWithStats",
+    "inpaint",
+)
 
 
 def _repo_root() -> Path:
@@ -596,11 +603,25 @@ def get_runtime_dependency_status(model_id: str) -> RuntimeDependencyStatus:
     required_modules = _RUNTIME_REQUIRED_MODULES.get(str(model_id), ())
     if "manga_translator" in required_modules:
         _ensure_upstream_import_path()
-    missing = tuple(
-        module_name
-        for module_name in required_modules
-        if importlib.util.find_spec(module_name) is None
-    )
+    missing_modules: list[str] = []
+    for module_name in required_modules:
+        try:
+            module_spec = importlib.util.find_spec(module_name)
+        except (ImportError, AttributeError, ValueError):
+            module_spec = None
+        if module_spec is None:
+            missing_modules.append(module_name)
+            continue
+        if module_name != "cv2":
+            continue
+        try:
+            cv2_module = importlib.import_module(module_name)
+        except Exception:
+            missing_modules.append(module_name)
+            continue
+        if any(not hasattr(cv2_module, attribute) for attribute in _CV2_REQUIRED_ATTRIBUTES):
+            missing_modules.append(module_name)
+    missing = tuple(missing_modules)
     return RuntimeDependencyStatus(
         supported=True,
         ok=not missing,
@@ -823,12 +844,14 @@ def download_runtime_assets(
     except KeyError:
         pass
     else:
-        prepare_models(
-            (str(model_id),),
-            root_dir=_resolve_model_root(root_dir),
-            quiet=quiet,
-            progress_callback=progress_callback,
-        )
+        prepare_kwargs: dict[str, object] = {
+            "root_dir": _resolve_model_root(root_dir),
+        }
+        if quiet:
+            prepare_kwargs["quiet"] = quiet
+        if progress_callback is not None:
+            prepare_kwargs["progress_callback"] = progress_callback
+        prepare_models((str(model_id),), **prepare_kwargs)
         return get_runtime_asset_status(model_id, root_dir)
 
     wrapper = _build_runtime_wrapper(model_id, root_dir)

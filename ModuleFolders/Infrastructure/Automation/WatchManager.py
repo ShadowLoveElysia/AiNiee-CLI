@@ -27,6 +27,14 @@ from ModuleFolders.Infrastructure.Automation.OutputCollector import (
     AUTOMATION_OUTPUT_COLLECTION_CONFIG_KEY,
     normalize_output_collection_config,
 )
+from ModuleFolders.Infrastructure.SensitiveData import sanitize_sensitive_data
+from ModuleFolders.Infrastructure.TaskContract import (
+    QUEUE_TASK_TYPES,
+    QUEUE_TASK_OVERRIDE_FIELDS,
+    TaskContractError,
+    TaskSpec,
+    select_task_contract_fields,
+)
 
 
 SERIES_VOLUME_PATTERNS = (
@@ -36,6 +44,15 @@ SERIES_VOLUME_PATTERNS = (
 )
 
 WATCH_TARGET_TYPES = {"file", "folder", "both"}
+WATCH_RULE_OVERRIDE_FIELDS = (
+    frozenset(QUEUE_TASK_OVERRIDE_FIELDS) | {"lines", "tokens"}
+) - {
+    "input_path",
+    "output_path",
+    "profile",
+    "rules_profile",
+}
+WATCH_RULE_RUNTIME_METADATA_FIELDS = frozenset({"files_processed", "last_activity"})
 _NAT_SORT_KEY = natsort_keygen(alg=ns.PATH | ns.IGNORECASE)
 
 
@@ -93,6 +110,44 @@ class WatchRule:
                  trigger_mode: str = "file", rules_profile: str = "",
                  settle_existing: bool = False, series_incremental: bool = False,
                  watch_target_type: str = "file", **kwargs):
+        metadata = kwargs.pop("extra", {})
+        if metadata is None:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            raise TaskContractError("Watch rule extra metadata must be a mapping")
+        unknown = sorted(
+            set(kwargs) - WATCH_RULE_OVERRIDE_FIELDS - WATCH_RULE_RUNTIME_METADATA_FIELDS
+        )
+        if unknown:
+            raise TaskContractError(f"Unknown watch rule fields: {', '.join(unknown)}")
+        overrides = {key: kwargs[key] for key in WATCH_RULE_OVERRIDE_FIELDS if key in kwargs}
+        payload = {
+            "task_type": task_type,
+            "input_path": watch_path or ".",
+            "output_path": output_path or None,
+            "profile": profile or None,
+            "rules_profile": rules_profile or None,
+            **overrides,
+        }
+        normalized = TaskSpec.from_mapping(payload).to_mapping(
+            include_none=True,
+            include_api_key=True,
+        )
+        if normalized["task_type"] not in QUEUE_TASK_TYPES or normalized["manga"]:
+            raise TaskContractError(
+                f"Task type {normalized['task_type']!r} is not supported by watch rules"
+            )
+        overrides = {
+            key: (
+                normalized["lines_limit"]
+                if key == "lines"
+                else normalized["tokens_limit"]
+                if key == "tokens"
+                else normalized[key]
+            )
+            for key in WATCH_RULE_OVERRIDE_FIELDS
+            if key in overrides
+        }
         self.id = rule_id
         self.watch_path = os.path.abspath(watch_path)
         self.output_path = output_path
@@ -100,18 +155,22 @@ class WatchRule:
         self.file_patterns = self._normalize_patterns(file_patterns)
         self.profile = profile
         self.rules_profile = rules_profile
-        self.task_type = task_type
+        self.task_type = normalized["task_type"]
         self.auto_start = auto_start
         self.debounce_seconds = debounce_seconds
         self.recursive = recursive
         self.enabled = enabled
         self.move_to_done = move_to_done
-        self.workflow_steps = self._normalize_rule_workflow_steps(workflow_steps, task_type, auto_start)
+        self.workflow_steps = self._normalize_rule_workflow_steps(
+            workflow_steps,
+            normalized["task_type"],
+            auto_start,
+        )
         self.trigger_mode = trigger_mode if trigger_mode in {"file", "folder"} else "file"
         self.settle_existing = settle_existing
         self.series_incremental = bool(series_incremental)
         self.watch_target_type = self._normalize_watch_target_type(watch_target_type)
-        self.extra = kwargs
+        self.extra = {**metadata, **overrides}
 
         # 运行状态
         self.files_processed = 0
@@ -160,7 +219,7 @@ class WatchRule:
 
     def to_dict(self) -> dict:
         """转换为字典"""
-        return {
+        return sanitize_sensitive_data({
             "id": self.id,
             "watch_path": self.watch_path,
             "output_path": self.output_path,
@@ -180,11 +239,19 @@ class WatchRule:
             "series_incremental": self.series_incremental,
             "watch_target_type": self.watch_target_type,
             **self.extra
-        }
+        })
 
     @classmethod
     def from_dict(cls, data: dict) -> "WatchRule":
         """从字典创建"""
+        known_fields = {
+            "id", "watch_path", "output_path", "done_path", "file_patterns",
+            "profile", "rules_profile", "task_type", "auto_start",
+            "debounce_seconds", "recursive", "enabled", "move_to_done",
+            "workflow_steps", "trigger_mode", "settle_existing",
+            "series_incremental", "watch_target_type", "detect_target",
+            *WATCH_RULE_RUNTIME_METADATA_FIELDS,
+        }
         return cls(
             rule_id=data.get("id", ""),
             watch_path=data.get("watch_path", ""),
@@ -204,6 +271,7 @@ class WatchRule:
             settle_existing=data.get("settle_existing", False),
             series_incremental=data.get("series_incremental", False),
             watch_target_type=data.get("watch_target_type", data.get("detect_target", "file")),
+            **{key: value for key, value in data.items() if key not in known_fields},
         )
 
 
@@ -372,6 +440,55 @@ class WatchManager(Base):
                     task_type,
                     auto_start,
                 )
+
+            unknown = sorted(
+                key
+                for key in updates
+                if not hasattr(rule, key) and key not in WATCH_RULE_OVERRIDE_FIELDS
+            )
+            if unknown:
+                raise TaskContractError(f"Unknown watch rule fields: {', '.join(unknown)}")
+            override_updates = {
+                key: updates.pop(key)
+                for key in list(updates)
+                if key in WATCH_RULE_OVERRIDE_FIELDS
+            }
+            candidate = WatchRule(
+                rule_id=rule.id,
+                watch_path=updates.get("watch_path", rule.watch_path),
+                output_path=updates.get("output_path", rule.output_path),
+                done_path=updates.get("done_path", rule.done_path),
+                file_patterns=updates.get("file_patterns", rule.file_patterns),
+                profile=updates.get("profile", rule.profile),
+                rules_profile=updates.get("rules_profile", rule.rules_profile),
+                task_type=task_type,
+                auto_start=auto_start,
+                debounce_seconds=updates.get("debounce_seconds", rule.debounce_seconds),
+                recursive=updates.get("recursive", rule.recursive),
+                enabled=updates.get("enabled", rule.enabled),
+                move_to_done=updates.get("move_to_done", rule.move_to_done),
+                workflow_steps=updates.get("workflow_steps", rule.workflow_steps),
+                trigger_mode=updates.get("trigger_mode", rule.trigger_mode),
+                settle_existing=updates.get("settle_existing", rule.settle_existing),
+                series_incremental=updates.get("series_incremental", rule.series_incremental),
+                watch_target_type=updates.get("watch_target_type", rule.watch_target_type),
+                extra={
+                    key: value
+                    for key, value in rule.extra.items()
+                    if key not in WATCH_RULE_OVERRIDE_FIELDS
+                },
+                **{
+                    **{
+                        key: value
+                        for key, value in rule.extra.items()
+                        if key in WATCH_RULE_OVERRIDE_FIELDS
+                    },
+                    **override_updates,
+                },
+            )
+            updates["task_type"] = candidate.task_type
+            updates["workflow_steps"] = candidate.workflow_steps
+            rule.extra = candidate.extra
 
             for key, value in updates.items():
                 if hasattr(rule, key):
@@ -1079,6 +1196,9 @@ class WatchManager(Base):
             "trigger_file_name": os.path.basename(file_path),
             "trigger_detected_at": datetime.now().isoformat(timespec="seconds"),
         }
+        # Preserve all contract fields stored by older watch-rule versions,
+        # including the ``lines``/``tokens`` aliases.
+        task_config.update(select_task_contract_fields(rule.extra))
         series_enabled = bool(rule.series_incremental)
         series = {}
         if folder_series is not None:

@@ -21,6 +21,22 @@ except Exception:  # pragma: no cover - optional runtime import
     cv2 = None
 
 
+def _has_opencv_inpaint_support() -> bool:
+    """检查 OpenCV 是否具备当前引擎实际需要的 API。"""
+    if cv2 is None:
+        return False
+    return all(
+        (
+            callable(getattr(cv2, "cvtColor", None)),
+            callable(getattr(cv2, "inpaint", None)),
+            getattr(cv2, "COLOR_RGB2BGR", None) is not None,
+            getattr(cv2, "COLOR_BGR2RGB", None) is not None,
+            getattr(cv2, "INPAINT_NS", None) is not None,
+            getattr(cv2, "INPAINT_TELEA", None) is not None,
+        )
+    )
+
+
 def _load_mask(path: str | Path | None, size: tuple[int, int]) -> Image.Image:
     if not path:
         return Image.new("L", size, 0)
@@ -134,8 +150,8 @@ class InpaintEngine:
         device_status = get_runtime_device_status(self.device)
         runtime_engine_id = runtime_status.runtime_engine_id if runtime_status.available else "opencv-telea"
         if not runtime_status.available and self.engine_id == "lama-manga":
-            runtime_engine_id = "opencv-ns" if cv2 is not None else "pil-median-fallback"
-        elif not runtime_status.available and cv2 is None:
+            runtime_engine_id = "opencv-ns" if _has_opencv_inpaint_support() else "pil-median-fallback"
+        elif not runtime_status.available and not _has_opencv_inpaint_support():
             runtime_engine_id = "pil-median-fallback"
         return {
             "configured_engine_id": self.engine_id,
@@ -196,20 +212,26 @@ class InpaintEngine:
             except Exception:
                 pass
 
-        if cv2 is not None:
-            mask_array = np.array(cleanup_mask, dtype=np.uint8)
-            source_array = np.array(source, dtype=np.uint8)
-            source_bgr = cv2.cvtColor(source_array, cv2.COLOR_RGB2BGR)
-            if self.engine_id == "lama-manga":
-                inpaint_radius = 5
-                inpaint_flags = cv2.INPAINT_NS
-                runtime_engine_id = "opencv-ns"
-            else:
-                inpaint_radius = 3
-                inpaint_flags = cv2.INPAINT_TELEA
-                runtime_engine_id = "opencv-telea"
-            result_bgr = cv2.inpaint(source_bgr, mask_array, inpaint_radius, inpaint_flags)
-            result_image = Image.fromarray(cv2.cvtColor(result_bgr, cv2.COLOR_BGR2RGB))
+        if _has_opencv_inpaint_support():
+            try:
+                mask_array = np.array(cleanup_mask, dtype=np.uint8)
+                source_array = np.array(source, dtype=np.uint8)
+                source_bgr = cv2.cvtColor(source_array, cv2.COLOR_RGB2BGR)
+                if self.engine_id == "lama-manga":
+                    inpaint_radius = 5
+                    inpaint_flags = cv2.INPAINT_NS
+                    opencv_runtime_engine_id = "opencv-ns"
+                else:
+                    inpaint_radius = 3
+                    inpaint_flags = cv2.INPAINT_TELEA
+                    opencv_runtime_engine_id = "opencv-telea"
+                result_bgr = cv2.inpaint(source_bgr, mask_array, inpaint_radius, inpaint_flags)
+                result_image = Image.fromarray(cv2.cvtColor(result_bgr, cv2.COLOR_BGR2RGB))
+                runtime_engine_id = opencv_runtime_engine_id
+            except Exception:
+                # OpenCV 可能仅存在 Python 命名空间，或底层 DLL/API 已损坏；此时保留 PIL 结果。
+                runtime_engine_id = "pil-median-fallback"
+                result_image = _pil_fallback_inpaint(source, cleanup_mask)
         else:
             runtime_engine_id = "pil-median-fallback"
             result_image = _pil_fallback_inpaint(source, cleanup_mask)

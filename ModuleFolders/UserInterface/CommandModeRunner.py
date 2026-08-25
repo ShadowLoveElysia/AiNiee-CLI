@@ -13,6 +13,11 @@ from ModuleFolders.Base.Base import Base
 from ModuleFolders.Infrastructure.MangaFeatureGuard import get_manga_feature_status
 from ModuleFolders.Infrastructure.TaskConfig.PolishingMode import normalize_polishing_mode
 from ModuleFolders.Infrastructure.TaskConfig.TaskType import TaskType
+from ModuleFolders.Infrastructure.TaskContract import (
+    TaskContractError,
+    TaskSpec,
+    select_task_contract_fields,
+)
 
 
 console = Console()
@@ -34,6 +39,45 @@ _MANGA_PACKAGE_SUFFIXES = {
     ".cbr",
 }
 _MANGA_FILE_SUFFIXES = _MANGA_IMAGE_SUFFIXES | _MANGA_PACKAGE_SUFFIXES
+
+
+def normalize_cli_task_args(args) -> TaskSpec:
+    """通过共享协议校验 CLI 参数，并把规范值写回命名空间。"""
+    payload = select_task_contract_fields(vars(args))
+    spec = TaskSpec.from_mapping(payload)
+
+    for field_name in (
+        "input_path",
+        "output_path",
+        "profile",
+        "rules_profile",
+        "source_lang",
+        "target_lang",
+        "project_type",
+        "resume",
+        "queue_file",
+        "platform",
+        "model",
+        "api_url",
+        "api_key",
+        "threads",
+        "retry",
+        "timeout",
+        "rounds",
+        "pre_lines",
+        "think_depth",
+        "thinking_budget",
+        "polish_mode",
+        "manga",
+    ):
+        setattr(args, field_name, getattr(spec, field_name))
+    args.task = spec.task_type
+    args.lines = spec.lines_limit
+    args.tokens = spec.tokens_limit
+    args.failover = (
+        None if spec.failover is None else "on" if spec.failover else "off"
+    )
+    return spec
 
 
 def normalize_cli_path(path: str) -> str:
@@ -170,18 +214,31 @@ class CommandModeRunner:
             return result
 
     def run(self, args):
-        if args.task == "mcp":
+        if str(getattr(args, "task", "") or "").strip().lower() == "mcp":
+            args.task = "mcp"
             # MCP 命令行模式交给专用桥接层处理，保持 ainiee_cli.py 只做委托。
             return self.host.mcp_runtime_bridge.run_mcp_server_from_command(
                 transport=getattr(args, "mcp_transport", "stdio"),
             )
 
+        if getattr(args, "manga_runtime_check", False):
+            try:
+                args.manga = True
+                normalize_cli_task_args(args)
+            except TaskContractError as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                return 2
+            return self._run_manga_runtime_check(args)
+
+        try:
+            normalize_cli_task_args(args)
+        except TaskContractError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            return 2
+
         if getattr(args, "manga", False) and args.task != "translate":
             console.print("[red]Error: --manga currently only supports the translate task.[/red]")
             return 2
-
-        if getattr(args, "manga_runtime_check", False):
-            return self._run_manga_runtime_check(args)
 
         if args.profile:
             self.host.switch_active_profile(args.profile)
@@ -274,10 +331,17 @@ class CommandModeRunner:
         if args.api_url:
             self.host.config["base_url"] = args.api_url
         if args.api_key:
-            self.host.config["api_key"] = args.api_key
-            target_platform = self.host.config.get("target_platform", "")
-            if target_platform and target_platform in self.host.config.get("platforms", {}):
-                self.host.config["platforms"][target_platform]["api_key"] = args.api_key
+            if getattr(args, "_task_api_key_ephemeral", False):
+                runtime_overrides = getattr(self.host, "runtime_config_overrides", {})
+                if not isinstance(runtime_overrides, dict):
+                    runtime_overrides = {}
+                runtime_overrides["api_key"] = args.api_key
+                self.host.runtime_config_overrides = runtime_overrides
+            else:
+                self.host.config["api_key"] = args.api_key
+                target_platform = self.host.config.get("target_platform", "")
+                if target_platform and target_platform in self.host.config.get("platforms", {}):
+                    self.host.config["platforms"][target_platform]["api_key"] = args.api_key
 
         if args.think_depth is not None:
             think_depth = args.think_depth.strip() if isinstance(args.think_depth, str) else args.think_depth

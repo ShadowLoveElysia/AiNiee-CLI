@@ -450,6 +450,7 @@ export const ZH_CN_LOCALE: Record<string, string> = {
     "label_platform_override": "平台覆盖",
     "label_url_override": "地址覆盖",
     "label_key_override": "密钥覆盖",
+    "queue_api_key_storage_notice": "队列文件不保存 API Key；请使用配置档，或直接运行任务并提供临时密钥。",
     "label_model_override": "模型覆盖",
 
     // TaskQueue specific
@@ -1593,6 +1594,7 @@ export const EN_LOCALE: Record<string, string> = {
     "label_platform_override": "Platform Override",
     "label_url_override": "URL Override",
     "label_key_override": "Key Override",
+    "queue_api_key_storage_notice": "Queue files do not store API keys. Use a profile, or provide a temporary key when running a task directly.",
     "label_model_override": "Model Override",
 
     // TaskQueue specific

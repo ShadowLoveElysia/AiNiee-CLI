@@ -83,6 +83,10 @@ class _BubbleComponent:
 INVERTED_MONOLOGUE_VISUAL_MODE = "inverted_monologue"
 
 
+def _has_connected_components_support(cv2_module: object) -> bool:
+    return callable(getattr(cv2_module, "connectedComponentsWithStats", None))
+
+
 def _pad_bbox(bbox: list[int], page_width: int, page_height: int, pad_x: int, pad_y: int) -> list[int]:
     x1, y1, x2, y2 = bbox
     return [
@@ -284,6 +288,8 @@ def _extract_white_components(
         import cv2
     except Exception:
         return None, {}
+    if not _has_connected_components_support(cv2):
+        return None, {}
 
     try:
         with Image.open(source_path) as image:
@@ -299,7 +305,10 @@ def _extract_white_components(
             gray = np.asarray(resized, dtype=np.uint8)
 
     white_mask = (gray >= 245).astype(np.uint8)
-    label_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(white_mask, 8)
+    try:
+        label_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(white_mask, 8)
+    except Exception:
+        return None, {}
     total_pixels = max(1, page_width * page_height)
     min_area = max(1200, int(total_pixels * 0.0007))
     max_area = max(min_area + 1, int(total_pixels * 0.12))
@@ -349,6 +358,8 @@ def _extract_dark_components(
         import cv2
     except Exception:
         return None, {}
+    if not _has_connected_components_support(cv2):
+        return None, {}
 
     try:
         with Image.open(source_path) as image:
@@ -364,7 +375,10 @@ def _extract_dark_components(
         return None, {}
 
     dark_mask = (gray <= 76).astype(np.uint8)
-    label_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(dark_mask, 8)
+    try:
+        label_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(dark_mask, 8)
+    except Exception:
+        return None, {}
     total_pixels = max(1, page_width * page_height)
     min_area = max(800, int(total_pixels * 0.00042))
     max_area = max(min_area + 1, int(total_pixels * 0.2))

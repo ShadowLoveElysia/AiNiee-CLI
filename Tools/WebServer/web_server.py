@@ -19,7 +19,7 @@ try:
     from fastapi import FastAPI, HTTPException, Body, File, UploadFile, Response, BackgroundTasks, Query, Request, APIRouter
     from fastapi.staticfiles import StaticFiles
     from fastapi.responses import FileResponse, JSONResponse
-    from pydantic import BaseModel
+    from pydantic import BaseModel, ConfigDict, model_validator
 except ImportError:
     # This error will be caught and handled in ainiee_cli.py
     raise ImportError("Required packages are missing. Please run 'uv add fastapi uvicorn[standard] pydantic python-multipart'.,Or run 'uv sync'")
@@ -34,6 +34,13 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from ModuleFolders.Infrastructure.MangaFeatureGuard import get_manga_feature_status
+from ModuleFolders.Infrastructure.TaskContract import (
+    TASK_API_KEY_ENV,
+    TaskContractError,
+    TaskSpec,
+    build_cli_args,
+    normalize_task_name,
+)
 from ModuleFolders.Infrastructure.LLMRequester.SdkRequestMode import sync_sdk_request_mode_config
 from ModuleFolders.Infrastructure.Cache.CacheItem import TranslationStatus
 from ModuleFolders.Infrastructure.RemoteAccessPolicy import (
@@ -102,7 +109,7 @@ except Exception as exc:
 
 # --- Global State & Task Management ---
 
-WEB_TASK_API_KEY_ENV = "AINIEE_WEB_TASK_API_KEY"
+WEB_TASK_API_KEY_ENV = TASK_API_KEY_ENV
 
 
 def resolve_task_worker_python(project_root: str, platform_name: str | None = None) -> str:
@@ -246,10 +253,12 @@ class TaskManager:
                 self.push_log(line)
 
 
-    def start_task(self, payload: Dict[str, Any]) -> bool:
+    def start_task(self, payload: TaskSpec | Dict[str, Any]) -> bool:
         """Starts the ainiee_cli.py script as a subprocess with config overrides."""
         with self._lock:
-            if self.status == "running":
+            if self.status in {"running", "stopping"} or (
+                self.process is not None and self.process.poll() is None
+            ):
                 return False
             
             self.status = "running"
@@ -268,62 +277,19 @@ class TaskManager:
                 self.push_log(str(exc), "error")
                 return False
 
+            try:
+                spec = payload if isinstance(payload, TaskSpec) else TaskSpec.from_mapping(payload)
+            except TaskContractError as exc:
+                self.status = "error"
+                self.stats["status"] = "error"
+                self.push_log(f"Invalid task payload: {exc}", "error")
+                return False
+
             cli_args = [
                 worker_python,
                 os.path.join(PROJECT_ROOT, "ainiee_cli.py"),
-                payload["task"],
-                payload["input_path"],
-                "-y",
-                "--web-mode",
+                *build_cli_args(spec, non_interactive=True, web_mode=True),
             ]
-            
-            # Add optional arguments based on the payload
-            if payload.get("output_path"):
-                cli_args.extend(["--output", payload["output_path"]])
-            if payload.get("source_lang"):
-                cli_args.extend(["--source", payload["source_lang"]])
-            if payload.get("target_lang"):
-                cli_args.extend(["--target", payload["target_lang"]])
-            if payload.get("resume"):
-                cli_args.append("--resume")
-            
-            # Additional Overrides from Payload
-            if payload.get("threads") is not None:
-                cli_args.extend(["--threads", str(payload["threads"])])
-            if payload.get("retry") is not None:
-                cli_args.extend(["--retry", str(payload["retry"])])
-            if payload.get("timeout") is not None:
-                cli_args.extend(["--timeout", str(payload["timeout"])])
-            if payload.get("rounds") is not None:
-                cli_args.extend(["--rounds", str(payload["rounds"])])
-            if payload.get("pre_lines") is not None:
-                cli_args.extend(["--pre-lines", str(payload["pre_lines"])])
-            
-            if payload.get("model"):
-                cli_args.extend(["--model", payload["model"]])
-            if payload.get("api_url"):
-                cli_args.extend(["--api-url", payload["api_url"]])
-            
-            if payload.get("failover") is True:
-                cli_args.extend(["--failover", "on"])
-            elif payload.get("failover") is False:
-                cli_args.extend(["--failover", "off"])
-
-            if payload.get("lines") is not None:
-                cli_args.extend(["--lines", str(payload["lines"])])
-            if payload.get("tokens") is not None:
-                cli_args.extend(["--tokens", str(payload["tokens"])])
-            
-            if payload.get("profile"):
-                cli_args.extend(["--profile", payload["profile"]])
-            if payload.get("rules_profile"):
-                cli_args.extend(["--rules-profile", payload["rules_profile"]])
-            if payload.get("manga"):
-                cli_args.append("--manga")
-            
-            # Note: other keys like 'threads' are in the payload but not used here
-            # because ainiee_cli.py doesn't have CLI args for them. They are
-            # expected to be part of the loaded profile config.
 
             try:
                 # Get the system's preferred console encoding (e.g., 'gbk' on Chinese Windows)
@@ -334,8 +300,8 @@ class TaskManager:
                 env = system_os.environ.copy()
                 # Keep credentials out of argv, which is commonly visible in process listings.
                 env.pop(WEB_TASK_API_KEY_ENV, None)
-                if payload.get("api_key"):
-                    env[WEB_TASK_API_KEY_ENV] = str(payload["api_key"])
+                if spec.api_key:
+                    env[WEB_TASK_API_KEY_ENV] = spec.api_key
                 # 获取当前 WebServer 的运行地址
                 env["AINIEE_INTERNAL_API_URL"] = task_manager.internal_api_url
                 env[INTERNAL_AUTH_ENV] = INTERNAL_API_TOKEN
@@ -356,22 +322,27 @@ class TaskManager:
                     env=env # 传递环境变量
                 )
                 
-                self.monitor_thread = threading.Thread(target=self._process_monitor)
+                self.monitor_thread = threading.Thread(
+                    target=self._process_monitor,
+                    args=(self.process,),
+                )
                 self.monitor_thread.daemon = True
                 self.monitor_thread.start()
 
                 return True
             except Exception as e:
                 self.status = "error"
+                self.stats["status"] = "error"
                 self.push_log(f"Failed to start process: {e}", "error")
                 return False
 
-    def _process_monitor(self):
+    def _process_monitor(self, process=None):
         """Monitors the subprocess, which now provides correctly decoded strings."""
-        if self.process and self.process.stdout:
+        process = process or self.process
+        if process and process.stdout:
             import re
             # Popen now handles the decoding, so we can iterate over strings directly.
-            for line in iter(self.process.stdout.readline, ''):
+            for line in iter(process.stdout.readline, ''):
                 line = line.strip()
                 if line:
                     self.push_log(line)
@@ -422,39 +393,56 @@ class TaskManager:
                             # Non-fatal parsing error
                             pass
         
-        if self.process:
-            self.process.wait()
-        
+        if process:
+            process.wait()
+
         with self._lock:
+            if self.process is not process:
+                return
             if self.status == "running":
-                if self.process and self.process.returncode == 0:
+                if process and process.returncode == 0:
                     self.status = "completed"
                     self.stats["status"] = "completed"
                 else:
                     self.status = "error"
                     self.stats["status"] = "error"
+            elif self.status == "stopping":
+                self.status = "idle"
+                self.stats["status"] = "idle"
+                self.push_log("Task stopped.")
             self.process = None
 
     def stop_task(self):
         """Stops the running task."""
         with self._lock:
-            if self.status != "running" or not self.process:
-                return
+            if self.status not in {"running", "stopping"} or not self.process:
+                return True
             
             self.status = "stopping"
             self.stats["status"] = "stopping"
             self.push_log("Sending force stop signal...", "warning")
             
+            process = self.process
             try:
                 # Direct force kill as requested (Data safety guaranteed by cache)
-                self.process.kill()
-                self.process.wait(timeout=2)
+                process.kill()
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.push_log(
+                    "Task process did not exit after the stop signal; new tasks remain blocked.",
+                    "error",
+                )
+                return False
             except Exception as e:
                 self.push_log(f"Force stop error: {e}", "error")
-            
+                if process.poll() is None:
+                    return False
+
+            self.process = None
             self.status = "idle"
             self.stats["status"] = "idle"
             self.push_log("Task stopped.")
+            return True
 
 
 task_manager = TaskManager()
@@ -582,7 +570,9 @@ class DeleteFileRequest(BaseModel):
     files: List[str]
 
 class QueueTaskItem(BaseModel):
-    task_type: int
+    model_config = ConfigDict(extra="forbid")
+
+    task_type: str | int
     input_path: str
     output_path: Optional[str] = None
     profile: Optional[str] = None
@@ -601,19 +591,51 @@ class QueueTaskItem(BaseModel):
     pre_lines: Optional[int] = None
     lines_limit: Optional[int] = None
     tokens_limit: Optional[int] = None
-    think_depth: Optional[str] = None
+    lines: Optional[int] = None
+    tokens: Optional[int] = None
+    think_depth: Optional[str | int] = None
     thinking_budget: Optional[int] = None
+    failover: Optional[bool] = None
+    resume: Optional[bool] = False
+    polish_mode: Optional[str] = None
     status: Optional[str] = "waiting"
 
+    def to_task_spec(self) -> TaskSpec:
+        payload = self.model_dump(exclude={"status"}, exclude_none=True)
+        return TaskSpec.from_mapping(payload)
 
-def normalize_queue_limits(item: QueueTaskItem) -> QueueTaskItem:
-    if item.tokens_limit is not None:
-        item.tokens_limit = max(400, min(16000, int(item.tokens_limit)))
-        item.lines_limit = None
-    elif item.lines_limit is not None:
-        item.lines_limit = max(1, min(100, int(item.lines_limit)))
-        item.tokens_limit = None
-    return item
+
+class QueueTaskUpdate(BaseModel):
+    """队列更新输入；显式 null 用于清空可选覆盖。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_type: Optional[str | int] = None
+    input_path: Optional[str] = None
+    output_path: Optional[str] = None
+    profile: Optional[str] = None
+    rules_profile: Optional[str] = None
+    source_lang: Optional[str] = None
+    target_lang: Optional[str] = None
+    project_type: Optional[str] = None
+    platform: Optional[str] = None
+    api_url: Optional[str] = None
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    threads: Optional[int] = None
+    retry: Optional[int] = None
+    timeout: Optional[int] = None
+    rounds: Optional[int] = None
+    pre_lines: Optional[int] = None
+    lines_limit: Optional[int] = None
+    tokens_limit: Optional[int] = None
+    lines: Optional[int] = None
+    tokens: Optional[int] = None
+    think_depth: Optional[str | int] = None
+    thinking_budget: Optional[int] = None
+    failover: Optional[bool] = None
+    resume: Optional[bool] = None
+    polish_mode: Optional[str] = None
 
 class QueueMoveRequest(BaseModel):
     to_index: int
@@ -625,14 +647,20 @@ class QueueRawRequest(BaseModel):
     content: str
 
 class TaskPayload(BaseModel):
-    """Pydantic model that EXACTLY matches the frontend's TaskPayload interface in types.ts"""
-    task: str
-    input_path: str
+    """Web 任务传输模型；执行语义由 TaskSpec 统一归一化。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task: Optional[str | int] = None
+    task_type: Optional[str | int] = None
+    run_all_in_one: Optional[bool] = None
+    input_path: Optional[str] = None
     output_path: Optional[str] = None
     project_type: Optional[str] = None
     resume: Optional[bool] = False
-    profile: Optional[str] = None # Added profile field
+    profile: Optional[str] = None
     rules_profile: Optional[str] = None
+    queue_file: Optional[str] = None
     
     # Overrides
     source_lang: Optional[str] = None
@@ -649,11 +677,24 @@ class TaskPayload(BaseModel):
     api_url: Optional[str] = None
     api_key: Optional[str] = None
     failover: Optional[bool] = None
+    think_depth: Optional[str | int] = None
+    thinking_budget: Optional[int] = None
     
     # Limits
     lines: Optional[int] = None
     tokens: Optional[int] = None
+    lines_limit: Optional[int] = None
+    tokens_limit: Optional[int] = None
+    polish_mode: Optional[str] = None
     manga: Optional[bool] = False
+
+    @model_validator(mode="after")
+    def validate_task_contract(self):
+        TaskSpec.from_mapping(self.model_dump(exclude_none=True))
+        return self
+
+    def to_task_spec(self) -> TaskSpec:
+        return TaskSpec.from_mapping(self.model_dump(exclude_none=True))
 
 # --- FastAPI Application ---
 
@@ -2839,11 +2880,17 @@ async def create_platform(request: PlatformCreateRequest):
 
 @app.post("/api/task/run")
 async def run_task(payload: TaskPayload):
-    if task_manager.status == "running":
-        raise HTTPException(status_code=409, detail="A task is already running.")
+    if task_manager.status in {"running", "stopping"}:
+        detail = (
+            "Task process is still stopping; retry after it exits."
+            if task_manager.status == "stopping"
+            else "A task is already running."
+        )
+        raise HTTPException(status_code=409, detail=detail)
 
+    spec = payload.to_task_spec()
     active_config = _load_active_config_payload()
-    missing_prompts = _missing_prompt_selections(payload.task, active_config)
+    missing_prompts = _missing_prompt_selections(spec.task_type, active_config)
     if missing_prompts:
         labels = {
             "translation": _web_tr(
@@ -2860,7 +2907,7 @@ async def run_task(payload: TaskPayload):
         detail = "; ".join(labels[item] for item in missing_prompts)
         raise HTTPException(status_code=422, detail=detail)
 
-    if payload.manga:
+    if spec.manga:
         manga_status = get_manga_feature_status(require_models=False)
         if not manga_status.available:
             raise HTTPException(status_code=503, detail=manga_status.user_message())
@@ -2870,7 +2917,7 @@ async def run_task(payload: TaskPayload):
         cm = get_cache_manager()
         if hasattr(cm, 'project') and cm.project and getattr(cm, 'save_to_file_require_flag', False):
             # 获取输出路径（优先使用 payload 里的，如果没有则从当前配置读）
-            output_path = payload.output_path or _load_active_config_payload().get("label_output_path")
+            output_path = spec.output_path or _load_active_config_payload().get("label_output_path")
             if output_path:
                 cm.save_to_file_require_path = output_path
                 cm.save_to_file()
@@ -2878,14 +2925,18 @@ async def run_task(payload: TaskPayload):
     except Exception as e:
         print(f"Warning: Failed to flush web cache before task start: {e}")
 
-    if not task_manager.start_task(payload.dict()):
+    if not task_manager.start_task(spec):
         raise HTTPException(status_code=500, detail="Failed to start task process.")
     
     return {"success": True, "message": "Task started successfully."}
 
 @app.post("/api/task/stop")
 async def stop_task():
-    task_manager.stop_task()
+    if not task_manager.stop_task():
+        raise HTTPException(
+            status_code=409,
+            detail="Task process is still stopping; retry after it exits.",
+        )
     return {"message": "Stop signal sent."}
 
 @app.get("/api/task/status")
@@ -4245,8 +4296,18 @@ async def get_queue(request: Request):
                     qm.stop_task_processing(idx)
                     task.locked = False
 
+            try:
+                if hasattr(task, "to_task_spec"):
+                    public_task_type = task.to_task_spec().task_type
+                else:
+                    public_task_type = normalize_task_name(getattr(task, "task_type", None))
+                task_contract_error = None
+            except (AttributeError, TaskContractError, TypeError, ValueError) as exc:
+                public_task_type = "invalid"
+                task_contract_error = str(exc)
+
             task_dict = {
-                "task_type": task.task_type,
+                "task_type": public_task_type,
                 "input_path": task.input_path,
                 "output_path": getattr(task, "output_path", ""),
                 "profile": getattr(task, "profile", ""),
@@ -4268,6 +4329,9 @@ async def get_queue(request: Request):
                 "tokens_limit": getattr(task, "tokens_limit", None),
                 "think_depth": getattr(task, "think_depth", ""),
                 "thinking_budget": getattr(task, "thinking_budget", None),
+                "failover": getattr(task, "failover", None),
+                "resume": getattr(task, "resume", False),
+                "polish_mode": getattr(task, "polish_mode", None),
                 "status": getattr(task, "status", "waiting"),
                 "locked": getattr(task, "locked", False),
 
@@ -4277,6 +4341,8 @@ async def get_queue(request: Request):
                 "process_start_time": getattr(task, "process_start_time", None),
                 "last_activity_time": getattr(task, "last_activity_time", None)
             }
+            if task_contract_error:
+                task_dict["task_contract_error"] = task_contract_error
             tasks.append(task_dict)
         if is_mcp_request(request):
             return sanitize_data_for_mcp(tasks, path="/api/queue")
@@ -4289,40 +4355,24 @@ async def get_queue(request: Request):
 async def add_to_queue(item: QueueTaskItem, request: Request):
     """Add a new task to the queue"""
     try:
-        item = normalize_queue_limits(item)
         if is_mcp_request(request) and item.api_key == MCP_SECRET_PLACEHOLDER:
             raise HTTPException(
                 status_code=400,
                 detail="A redacted MCP secret placeholder cannot be used as a new queue API key.",
             )
+        if item.api_key:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "api_key cannot be stored in a queue file. "
+                    "Use a profile or run the task directly."
+                ),
+            )
 
         qm = get_queue_manager()
         from ModuleFolders.Service.TaskQueue.QueueManager import QueueTaskItem as QueueTaskItemImpl
 
-        # Create task with proper constructor parameters
-        task = QueueTaskItemImpl(
-            task_type=item.task_type,
-            input_path=item.input_path,
-            output_path=item.output_path,
-            profile=item.profile,
-            rules_profile=item.rules_profile,
-            source_lang=item.source_lang,
-            target_lang=item.target_lang,
-            project_type=item.project_type,
-            platform=item.platform,
-            api_url=item.api_url,
-            api_key=item.api_key,
-            model=item.model,
-            threads=item.threads,
-            retry=item.retry,
-            timeout=item.timeout,
-            rounds=item.rounds,
-            pre_lines=item.pre_lines,
-            lines_limit=item.lines_limit,
-            tokens_limit=item.tokens_limit,
-            think_depth=item.think_depth,
-            thinking_budget=item.thinking_budget
-        )
+        task = QueueTaskItemImpl(**item.to_task_spec().to_queue_fields())
 
         # Ensure the task has proper defaults
         task.status = "waiting"
@@ -4330,6 +4380,10 @@ async def add_to_queue(item: QueueTaskItem, request: Request):
 
         qm.add_task(task)
         return {"success": True}
+    except TaskContractError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -4346,62 +4400,86 @@ async def remove_from_queue(index: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/queue/{index}")
-async def update_queue_item(index: int, item: QueueTaskItem, request: Request):
+async def update_queue_item(index: int, item: QueueTaskUpdate, request: Request):
     """Update a task in the queue"""
     try:
-        item = normalize_queue_limits(item)
         qm = get_queue_manager()
         if index < 0 or index >= len(qm.tasks):
             raise HTTPException(status_code=400, detail="Invalid task index")
 
         task = qm.tasks[index]
 
-        if is_mcp_request(request) and item.api_key == MCP_SECRET_PLACEHOLDER:
-            item.api_key = getattr(task, "api_key", "")
+        fields_to_update = set(item.model_fields_set)
+        preserve_api_key = item.api_key == "" or (
+            is_mcp_request(request) and item.api_key == MCP_SECRET_PLACEHOLDER
+        )
+        if preserve_api_key:
+            fields_to_update.discard("api_key")
+        elif "api_key" in fields_to_update and item.api_key:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "api_key cannot be stored in a queue file. "
+                    "Use a profile or run the task directly."
+                ),
+            )
 
-        task.task_type = item.task_type
-        task.input_path = item.input_path
-        if item.output_path:
-            task.output_path = item.output_path
-        if item.profile:
-            task.profile = item.profile
-        if item.rules_profile:
-            task.rules_profile = item.rules_profile
-        if item.source_lang:
-            task.source_lang = item.source_lang
-        if item.target_lang:
-            task.target_lang = item.target_lang
-        if item.project_type:
-            task.project_type = item.project_type
-        if item.platform:
-            task.platform = item.platform
-        if item.api_url:
-            task.api_url = item.api_url
-        if item.api_key:
-            task.api_key = item.api_key
-        if item.model:
-            task.model = item.model
-        if item.threads is not None:
-            task.threads = item.threads
-        if item.retry is not None:
-            task.retry = item.retry
-        if item.timeout is not None:
-            task.timeout = item.timeout
-        if item.rounds is not None:
-            task.rounds = item.rounds
-        if item.pre_lines is not None:
-            task.pre_lines = item.pre_lines
-        task.lines_limit = item.lines_limit
-        task.tokens_limit = item.tokens_limit
-        if item.think_depth:
-            task.think_depth = item.think_depth
-        if item.thinking_budget is not None:
-            task.thinking_budget = item.thinking_budget
+        existing_payload = task.to_task_spec().to_mapping(
+            include_none=True,
+            include_api_key=True,
+        )
+        queue_payload = dict(existing_payload)
+        for field_name in fields_to_update:
+            queue_payload[field_name] = getattr(item, field_name)
+        if "lines" in fields_to_update:
+            legacy_lines = queue_payload.pop("lines")
+            if "lines_limit" in fields_to_update and queue_payload.get("lines_limit") != legacy_lines:
+                raise TaskContractError("Conflicting values for lines and lines_limit")
+            queue_payload["lines_limit"] = legacy_lines
+            fields_to_update.discard("lines")
+            fields_to_update.add("lines_limit")
+        if "tokens" in fields_to_update:
+            legacy_tokens = queue_payload.pop("tokens")
+            if "tokens_limit" in fields_to_update and queue_payload.get("tokens_limit") != legacy_tokens:
+                raise TaskContractError("Conflicting values for tokens and tokens_limit")
+            queue_payload["tokens_limit"] = legacy_tokens
+            fields_to_update.discard("tokens")
+            fields_to_update.add("tokens_limit")
+        if (
+            "task_type" in fields_to_update
+            and "polish_mode" not in fields_to_update
+            and normalize_task_name(item.task_type) == "translate"
+        ):
+            queue_payload["polish_mode"] = None
+            fields_to_update.add("polish_mode")
+        if "lines_limit" in fields_to_update and queue_payload.get("lines_limit") is not None:
+            queue_payload["tokens_limit"] = None
+            fields_to_update.add("tokens_limit")
+        if "tokens_limit" in fields_to_update and queue_payload.get("tokens_limit") is not None:
+            queue_payload["lines_limit"] = None
+            fields_to_update.add("lines_limit")
+        if preserve_api_key:
+            queue_payload["api_key"] = existing_payload.get("api_key")
+        # TaskSpec 用 None 表示无覆盖，而 model_fields_set 保留显式 null 的清空语义。
+        queue_fields = TaskSpec.from_mapping(queue_payload).to_queue_fields(
+            include_api_key=True
+        )
+        for field_name, value in queue_fields.items():
+            if field_name not in fields_to_update:
+                continue
+            setattr(task, field_name, value)
+        if "resume" in fields_to_update:
+            # 自动化工作流需要区分“未设置”与显式 false；null 用于恢复默认语义。
+            task.resume_explicit = item.resume is not None
 
         if qm.update_task(index, task):
             return {"success": True}
         else:
             raise HTTPException(status_code=400, detail="Failed to update task")
+    except TaskContractError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

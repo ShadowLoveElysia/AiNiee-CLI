@@ -6,7 +6,13 @@ import subprocess
 import sys
 from typing import Any, Dict, List
 
+from ModuleFolders.Infrastructure.TaskContract import TaskContractError
 from Tools.Skills.skill_base import Skill, SkillMeta, SkillParameter, SkillResult
+from Tools.Skills.skills.common import (
+    task_skill_parameters,
+    task_spec_from_skill_args,
+    task_subprocess_invocation,
+)
 
 
 PROJECT_ROOT = os.path.abspath(
@@ -14,7 +20,12 @@ PROJECT_ROOT = os.path.abspath(
 )
 
 
-def _run_ainiee_cli(args: List[str], timeout: int = 300) -> subprocess.CompletedProcess:
+def _run_ainiee_cli(
+    args: List[str],
+    timeout: int = 300,
+    *,
+    env: Dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     """Run a CLI subcommand and return the result."""
     cmd = [sys.executable, "-m", "ainiee_cli"] + args
     return subprocess.run(
@@ -23,6 +34,7 @@ def _run_ainiee_cli(args: List[str], timeout: int = 300) -> subprocess.Completed
         text=True,
         timeout=timeout,
         cwd=PROJECT_ROOT,
+        env=env,
     )
 
 
@@ -49,67 +61,7 @@ class TranslateSkill(Skill):
                     default="translate",
                     enum=["translate", "polish", "all_in_one"],
                 ),
-                SkillParameter(
-                    name="input_path",
-                    description="Path to the input file or directory.",
-                    type="string",
-                    required=False,
-                ),
-                SkillParameter(
-                    name="output_path",
-                    description="Output directory path.",
-                    type="string",
-                    required=False,
-                ),
-                SkillParameter(
-                    name="profile",
-                    description="Configuration profile name.",
-                    type="string",
-                    required=False,
-                ),
-                SkillParameter(
-                    name="source_lang",
-                    description="Source language.",
-                    type="string",
-                    required=False,
-                ),
-                SkillParameter(
-                    name="target_lang",
-                    description="Target language.",
-                    type="string",
-                    required=False,
-                ),
-                SkillParameter(
-                    name="project_type",
-                    description="Project type (Txt, Epub, MTool, RenPy, etc.).",
-                    type="string",
-                    required=False,
-                ),
-                SkillParameter(
-                    name="threads",
-                    description="Concurrent thread count.",
-                    type="integer",
-                    required=False,
-                ),
-                SkillParameter(
-                    name="model",
-                    description="Model name override.",
-                    type="string",
-                    required=False,
-                ),
-                SkillParameter(
-                    name="platform",
-                    description="API platform override.",
-                    type="string",
-                    required=False,
-                ),
-                SkillParameter(
-                    name="resume",
-                    description="Resume from cache if available.",
-                    type="boolean",
-                    required=False,
-                    default=False,
-                ),
+                *task_skill_parameters(include_manga=True),
             ],
             examples=[
                 {
@@ -126,39 +78,19 @@ class TranslateSkill(Skill):
 
     def _run_translate_subprocess(self, args: Dict[str, Any]) -> SkillResult:
         """Execute translation via CLI subprocess (混合模式: CLI fallback)."""
-        cli_args = [args.get("task_type", "translate")]
-
-        if args.get("input_path"):
-            cli_args.append(args["input_path"])
-        if args.get("output_path"):
-            cli_args.extend(["-o", args["output_path"]])
-        if args.get("profile"):
-            cli_args.extend(["-p", args["profile"]])
-        if args.get("source_lang"):
-            cli_args.extend(["-s", args["source_lang"]])
-        if args.get("target_lang"):
-            cli_args.extend(["-t", args["target_lang"]])
-        if args.get("project_type"):
-            cli_args.extend(["--type", args["project_type"]])
-        if args.get("threads"):
-            cli_args.extend(["--threads", str(args["threads"])])
-        if args.get("model"):
-            cli_args.extend(["--model", args["model"]])
-        if args.get("platform"):
-            cli_args.extend(["--platform", args["platform"]])
-        if args.get("resume"):
-            cli_args.append("--resume")
-
-        # Non-interactive mode for automation
-        cli_args.append("--yes")
+        try:
+            spec = task_spec_from_skill_args(args)
+            cli_args, env = task_subprocess_invocation(spec)
+        except TaskContractError as exc:
+            return SkillResult.fail(str(exc), "INVALID_TASK")
 
         try:
-            result = _run_ainiee_cli(cli_args, timeout=3600)
+            result = _run_ainiee_cli(cli_args[2:], timeout=3600, env=env)
             data = {
                 "exit_code": result.returncode,
                 "stdout": result.stdout[-2000:] if result.stdout else "",
                 "stderr": result.stderr[-2000:] if result.stderr else "",
-                "command": shlex.join([sys.executable, "-m", "ainiee_cli", *cli_args]),
+                "command": shlex.join([sys.executable, *cli_args]),
             }
             if result.returncode != 0:
                 return SkillResult.fail(

@@ -12,6 +12,11 @@ from ModuleFolders.Infrastructure.SensitiveData import (
     sanitize_sensitive_data,
 )
 from ModuleFolders.Infrastructure.TaskConfig.TaskType import TaskType
+from ModuleFolders.Infrastructure.TaskContract import (
+    TaskContractError,
+    TaskSpec,
+    select_task_contract_fields,
+)
 
 class QueueTaskItem:
     def __init__(self, task_type, input_path, output_path=None, profile=None, rules_profile=None, 
@@ -19,38 +24,47 @@ class QueueTaskItem:
                  platform=None, api_url=None, api_key=None, model=None, 
                  threads=None, retry=None, timeout=None, rounds=None, 
                  pre_lines=None, lines_limit=None, tokens_limit=None, 
-                 think_depth=None, thinking_budget=None, workflow_steps=None,
+                 think_depth=None, thinking_budget=None, failover=None,
+                 polish_mode=None, resume=False, resume_explicit=None, manga=False, workflow_steps=None,
                  source=None, rule_id=None, automation_run_id=None,
                  automation_progress_file=None, automation_worker_pid=None,
                  trigger_file_path=None, trigger_file_name=None, trigger_detected_at=None,
                  series_incremental=False, series_key=None, series_volume=None, extra=None,
                  task_id=None):
+        spec = TaskSpec.from_mapping(
+            {
+                "task_type": task_type,
+                "input_path": input_path,
+                "output_path": output_path,
+                "profile": profile,
+                "rules_profile": rules_profile,
+                "source_lang": source_lang,
+                "target_lang": target_lang,
+                "project_type": project_type,
+                "platform": platform,
+                "api_url": api_url,
+                "api_key": api_key,
+                "model": model,
+                "threads": threads,
+                "retry": retry,
+                "timeout": timeout,
+                "rounds": rounds,
+                "pre_lines": pre_lines,
+                "lines_limit": lines_limit,
+                "tokens_limit": tokens_limit,
+                "think_depth": think_depth,
+                "thinking_budget": thinking_budget,
+                "failover": failover,
+                "polish_mode": polish_mode,
+                "resume": resume,
+                "manga": manga,
+            }
+        )
+        queue_fields = spec.to_queue_fields()
         self.task_id = self.normalize_task_id(task_id)
-        self.task_type = task_type
-        self.input_path = input_path
-        self.output_path = output_path
-        self.profile = profile
-        self.rules_profile = rules_profile
-        self.source_lang = source_lang
-        self.target_lang = target_lang
-        self.project_type = project_type
-        
-        # 精细化 API 覆盖参数
-        self.platform = platform
-        self.api_url = api_url
-        self.api_key = api_key
-        self.model = model
-        
-        # 性能覆盖参数
-        self.threads = threads
-        self.retry = retry
-        self.timeout = timeout
-        self.rounds = rounds
-        self.pre_lines = pre_lines
-        self.lines_limit = lines_limit
-        self.tokens_limit = tokens_limit
-        self.think_depth = think_depth
-        self.thinking_budget = thinking_budget
+        for field_name, value in queue_fields.items():
+            setattr(self, field_name, value)
+        self.resume_explicit = bool(resume_explicit) if resume_explicit is not None else None
         self.workflow_steps = workflow_steps or []
         self.source = source
         self.rule_id = rule_id
@@ -83,7 +97,12 @@ class QueueTaskItem:
 
     def to_runtime_dict(self):
         """Return the full in-memory task, including temporary credential overrides."""
-        return copy.deepcopy({k: v for k, v in vars(self).items() if not k.startswith('_')})
+        data = copy.deepcopy({k: v for k, v in vars(self).items() if not k.startswith('_')})
+        if self.resume_explicit is False or (
+            self.resume_explicit is None and self.workflow_steps
+        ):
+            data.pop("resume", None)
+        return data
 
     def to_persistent_dict(self):
         """Return a task representation that is safe to write or expose."""
@@ -93,10 +112,23 @@ class QueueTaskItem:
         """Keep the generic serializer safe by default."""
         return self.to_persistent_dict()
 
+    def to_task_spec(self):
+        """把旧队列字段转换为共享任务协议，运行元数据仍留在队列对象。"""
+        contract_error = (getattr(self, "extra", {}) or {}).get("task_contract_error")
+        if contract_error:
+            raise TaskContractError(str(contract_error))
+        payload = select_task_contract_fields(self.to_runtime_dict())
+        payload["task_type"] = self.task_type
+        return TaskSpec.from_mapping(payload)
+
     @classmethod
     def from_dict(cls, data):
+        if not isinstance(data, dict):
+            raise TaskContractError("Queue task item must be an object")
         # 兼容旧数据，剔除运行时字段后传入构造函数
         params = data.copy()
+        if "resume_explicit" not in params:
+            params["resume_explicit"] = params.get("resume") is not None
         status = params.pop("status", "waiting")
         locked = params.pop("locked", False)  # 移除locked字段，它不属于构造函数参数
 
@@ -105,7 +137,22 @@ class QueueTaskItem:
         last_activity_time = params.pop("last_activity_time", None)
         process_start_time = params.pop("process_start_time", None)
 
-        item = cls(**params)
+        try:
+            item = cls(**params)
+        except Exception as exc:
+            # 单条旧任务损坏不应导致整个队列无法加载。
+            task_id = params.get("task_id")
+            input_path = params.get("input_path")
+            if not isinstance(input_path, str) or not input_path.strip():
+                input_path = f"<invalid-queue-item:{task_id or 'unknown'}>"
+            item = cls(
+                task_type=TaskType.TRANSLATION,
+                input_path=input_path,
+                extra=params.get("extra") if isinstance(params.get("extra"), dict) else None,
+                task_id=task_id,
+            )
+            status = "error"
+            item.extra["task_contract_error"] = str(exc)
         item.status = status
         item.locked = locked
         item.is_processing = is_processing
@@ -271,8 +318,21 @@ class QueueManager(Base):
                 task.api_key = api_key
 
     def _replace_tasks_from_data(self, data):
+        if not isinstance(data, list):
+            raise ValueError("Queue data must be an array")
         old_tasks = self.tasks
-        new_tasks = [QueueTaskItem.from_dict(item) for item in data]
+        new_tasks = []
+        for index, item in enumerate(data):
+            if isinstance(item, dict):
+                new_tasks.append(QueueTaskItem.from_dict(item))
+                continue
+            fallback = QueueTaskItem(
+                TaskType.TRANSLATION,
+                f"<invalid-queue-item:{index}>",
+            )
+            fallback.status = "error"
+            fallback.extra["task_contract_error"] = "Queue task item must be an object"
+            new_tasks.append(fallback)
         self._restore_runtime_api_keys(old_tasks, new_tasks)
         task_ids_changed = any(
             not isinstance(item, dict) or item.get("task_id") != task.task_id
@@ -666,13 +726,14 @@ class QueueManager(Base):
         self.save_tasks()
         return True
 
-    def get_next_unlocked_task(self, start_index=0):
+    def get_next_unlocked_task(self, start_index=0, statuses=None):
         """获取下一个未锁定的待执行任务"""
+        allowed_statuses = set(statuses or {"waiting", "translated"})
         for i in range(start_index, len(self.tasks)):
             task = self.tasks[i]
             if self._task_has_workflow(task):
                 continue
-            if not task.locked and task.status in ["waiting", "translated"]:
+            if not task.locked and task.status in allowed_statuses:
                 return i, task
         return None, None
 
@@ -926,26 +987,45 @@ class QueueManager(Base):
             self._process_workflow_tasks(cli_menu)
 
             # 查找下一个需要翻译的任务
-            index, task = self.get_next_unlocked_task()
+            index, task = self.get_next_unlocked_task(statuses={"waiting"})
             if index is None:
                 break  # 没有更多翻译任务
 
+            if task.task_type == TaskType.POLISH:
+                self.mark_task_completed(index, "translated")
+                continue
+
             if task.task_type not in [TaskType.TRANSLATION, TaskType.TRANSLATE_AND_POLISH]:
-                # 标记为完成并继续
-                self.mark_task_completed(index, "completed")
+                self.mark_task_completed(index, "error")
                 continue
 
             # 标记任务为执行中
             self.mark_task_executing(index)
 
-            if self._run_single_step(cli_menu, task, TaskType.TRANSLATION):
+            if self._run_single_step(
+                cli_menu,
+                task,
+                TaskType.TRANSLATION,
+                resume=bool(getattr(task, "resume", False)),
+            ):
+                if Base.work_status == Base.STATUS.STOPING:
+                    self.mark_task_completed(index, "stopped")
+                    break
                 # 完成后标记状态
                 if task.task_type == TaskType.TRANSLATE_AND_POLISH:
                     self.mark_task_completed(index, "translated")
                 else:
                     self.mark_task_completed(index, "completed")
             else:
-                self.mark_task_completed(index, "error")
+                self.mark_task_completed(
+                    index,
+                    "stopped" if Base.work_status == Base.STATUS.STOPING else "error",
+                )
+
+        if Base.work_status == Base.STATUS.STOPING:
+            self.is_running = False
+            self.info("Task queue processing stopped.")
+            return
 
         # Phase 2: Polishing
         if Base.work_status != Base.STATUS.STOPING:
@@ -974,9 +1054,15 @@ class QueueManager(Base):
                         self.mark_task_executing(i)
 
                         if self._run_single_step(cli_menu, task, TaskType.POLISH, resume=True):
+                            if Base.work_status == Base.STATUS.STOPING:
+                                self.mark_task_completed(i, "stopped")
+                                break
                             self.mark_task_completed(i, "completed")
                         else:
-                            self.mark_task_completed(i, "error")
+                            self.mark_task_completed(
+                                i,
+                                "stopped" if Base.work_status == Base.STATUS.STOPING else "error",
+                            )
                         break
 
                 if not found_task:
@@ -1139,6 +1225,9 @@ class QueueManager(Base):
         original_rules_profile = cli_menu.active_rules_profile_name
         original_root_config = copy.deepcopy(getattr(cli_menu, "root_config", {}))
         original_config = copy.deepcopy(getattr(cli_menu, "config", {}))
+        original_runtime_overrides = copy.deepcopy(
+            getattr(cli_menu, "runtime_config_overrides", {})
+        )
         
         try:
             # 1. Apply Profile Base
@@ -1192,6 +1281,14 @@ class QueueManager(Base):
                 tp = cfg.get("target_platform")
                 if tp and tp in cfg.get("platforms", {}):
                     cfg["platforms"][tp]["thinking_budget"] = task.thinking_budget
+            if task.failover is not None:
+                cfg["enable_api_failover"] = bool(task.failover)
+            if task.polish_mode:
+                runtime_overrides = getattr(cli_menu, "runtime_config_overrides", {})
+                if not isinstance(runtime_overrides, dict):
+                    runtime_overrides = {}
+                runtime_overrides["polishing_mode_selection"] = task.polish_mode
+                cli_menu.runtime_config_overrides = runtime_overrides
 
             # 3. Execute
             # 更新活动时间（心跳）
@@ -1226,7 +1323,8 @@ class QueueManager(Base):
                     task.status = "translated"
                 else:
                     task.status = "completed"
-            return True
+                return True
+            return False
         except Exception as e:
             self.error(f"Task Error: {e}")
             task.status = "error"
@@ -1237,3 +1335,4 @@ class QueueManager(Base):
             cli_menu.active_rules_profile_name = original_rules_profile
             cli_menu.root_config = original_root_config
             cli_menu.config = original_config
+            cli_menu.runtime_config_overrides = original_runtime_overrides

@@ -17,7 +17,6 @@ from rich.tree import Tree
 
 from ModuleFolders.Infrastructure.Automation.WorkflowRunner import (
     describe_workflow_steps,
-    normalize_task_type,
     normalize_workflow_steps,
     task_type_to_step_type,
 )
@@ -71,15 +70,17 @@ class AutomationMenu:
 
     def _enqueue_watch_task(self, task_config):
         """Add a watch-triggered workflow task to the central queue."""
+        from ModuleFolders.Infrastructure.TaskContract import TaskSpec, select_task_contract_fields
         from ModuleFolders.Service.TaskQueue.QueueManager import QueueManager, QueueTaskItem
 
         queue_manager = QueueManager()
+        task_payload = select_task_contract_fields(task_config)
+        task_payload["task_type"] = task_config.get("task_type", "translation")
+        task_payload["input_path"] = task_config.get("input_path", "")
+        task_fields = TaskSpec.from_mapping(task_payload).to_queue_fields()
         task_item = QueueTaskItem(
-            normalize_task_type(task_config.get("task_type", "translation")),
-            task_config.get("input_path", ""),
-            output_path=task_config.get("output_path") or None,
-            profile=task_config.get("profile") or None,
-            rules_profile=task_config.get("rules_profile") or None,
+            **task_fields,
+            resume_explicit="resume" in task_payload,
             workflow_steps=task_config.get("workflow_steps") or [],
             source=task_config.get("source"),
             rule_id=task_config.get("rule_id"),
@@ -1061,6 +1062,11 @@ class AutomationMenu:
             self.host.save_config()
 
     def requeue_detected_watch_file(self):
+        from ModuleFolders.Infrastructure.TaskContract import (
+            TASK_CONTRACT_INPUT_FIELDS,
+            TaskSpec,
+            select_task_contract_fields,
+        )
         from ModuleFolders.Service.TaskQueue.QueueManager import QueueManager, QueueTaskItem
 
         candidates = []
@@ -1110,12 +1116,19 @@ class AutomationMenu:
         workflow_steps, auto_start = self._select_requeue_workflow(rule)
         target_path = item["path"]
         output_path = rule.output_path or self.watch_manager._generate_output_path(target_path)
+        task_payload = select_task_contract_fields(rule.extra)
+        task_payload.update(
+            {
+                "task_type": rule.task_type,
+                "input_path": target_path,
+                "output_path": output_path,
+                "profile": rule.profile or None,
+                "rules_profile": rule.rules_profile or None,
+            }
+        )
         task_item = QueueTaskItem(
-            normalize_task_type(rule.task_type),
-            target_path,
-            output_path=output_path,
-            profile=rule.profile or None,
-            rules_profile=rule.rules_profile or None,
+            **TaskSpec.from_mapping(task_payload).to_queue_fields(),
+            resume_explicit="resume" in task_payload,
             workflow_steps=workflow_steps,
             source="watch",
             rule_id=rule.id,
@@ -1125,6 +1138,11 @@ class AutomationMenu:
             series_incremental=getattr(rule, "series_incremental", False),
             series_key=item.get("series_key") or None,
             series_volume=item.get("series_volume") or None,
+            extra={
+                key: value
+                for key, value in rule.extra.items()
+                if key not in TASK_CONTRACT_INPUT_FIELDS
+            },
         )
 
         queue_manager = QueueManager()

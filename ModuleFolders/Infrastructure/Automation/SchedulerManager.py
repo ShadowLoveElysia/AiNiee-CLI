@@ -12,6 +12,34 @@ from typing import Callable, Dict, List, Optional, Any
 import rapidjson as json
 from ModuleFolders.Base.Base import Base
 from ModuleFolders.Infrastructure.Automation.WorkflowRunner import normalize_workflow_steps
+from ModuleFolders.Infrastructure.SensitiveData import sanitize_sensitive_data
+from ModuleFolders.Infrastructure.TaskContract import (
+    QUEUE_TASK_TYPES,
+    QUEUE_TASK_OVERRIDE_FIELDS,
+    TaskContractError,
+    TaskSpec,
+    select_task_contract_fields,
+)
+
+
+SCHEDULED_TASK_OVERRIDE_FIELDS = (
+    frozenset(QUEUE_TASK_OVERRIDE_FIELDS) | {"lines", "tokens"}
+) - {
+    "input_path",
+    "output_path",
+    "profile",
+    "rules_profile",
+}
+SCHEDULED_TASK_RUNTIME_METADATA_FIELDS = frozenset(
+    {
+        "last_run",
+        "next_run",
+        "run_count",
+        "last_status",
+        "pending_event",
+        "pending_event_count",
+    }
+)
 
 
 class CronParser:
@@ -191,6 +219,18 @@ class ScheduledTask:
         self.name = name
         self.trigger_type = kwargs.pop("trigger_type", "scheduled") or "scheduled"
         self.event_type = kwargs.pop("event_type", "")
+        metadata = kwargs.pop("extra", {})
+        if metadata is None:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            raise TaskContractError("Scheduled task extra metadata must be a mapping")
+        unknown = sorted(
+            set(kwargs)
+            - SCHEDULED_TASK_OVERRIDE_FIELDS
+            - SCHEDULED_TASK_RUNTIME_METADATA_FIELDS
+        )
+        if unknown:
+            raise TaskContractError(f"Unknown scheduled task fields: {', '.join(unknown)}")
         if self.trigger_type == "queue_added":
             self.event_type = "queue_added"
         elif self.trigger_type == "queue_pending":
@@ -200,16 +240,57 @@ class ScheduledTask:
             input_path = input_path or "queue"
             run_queue = True
             workflow_steps = [{"type": "run_queue"}]
+        overrides = {
+            key: kwargs[key]
+            for key in SCHEDULED_TASK_OVERRIDE_FIELDS
+            if key in kwargs
+        }
+        if self.trigger_type not in {"queue_added", "queue_pending"}:
+            payload = {
+                "task_type": task_type,
+                "input_path": input_path,
+                "output_path": output_path or None,
+                "profile": profile or None,
+                "rules_profile": rules_profile or None,
+                **overrides,
+            }
+            normalized = TaskSpec.from_mapping(payload).to_mapping(
+                include_none=True,
+                include_api_key=True,
+            )
+            if normalized["task_type"] not in QUEUE_TASK_TYPES or normalized["manga"]:
+                raise TaskContractError(
+                    f"Task type {normalized['task_type']!r} is not supported by scheduled tasks"
+                )
+            overrides = {
+                key: (
+                    normalized["lines_limit"]
+                    if key == "lines"
+                    else normalized["tokens_limit"]
+                    if key == "tokens"
+                    else normalized[key]
+                )
+                for key in SCHEDULED_TASK_OVERRIDE_FIELDS
+                if key in overrides
+            }
         self.schedule = schedule
         self.input_path = input_path
         self.output_path = output_path
         self.profile = profile
         self.rules_profile = rules_profile
-        self.task_type = task_type
+        self.task_type = (
+            task_type
+            if self.trigger_type in {"queue_added", "queue_pending"}
+            else normalized["task_type"]
+        )
         self.enabled = enabled
-        self.workflow_steps = normalize_workflow_steps(workflow_steps, task_type, True) if workflow_steps else []
+        self.workflow_steps = (
+            normalize_workflow_steps(workflow_steps, self.task_type, True)
+            if workflow_steps
+            else []
+        )
         self.run_queue = run_queue
-        self.extra = kwargs
+        self.extra = {**metadata, **overrides}
 
         # 解析时间表达式，兼容 cron 与用户友好的时间写法。
         self.schedule_rule = ScheduleParser.parse(
@@ -280,7 +361,7 @@ class ScheduledTask:
 
     def to_dict(self) -> dict:
         """转换为字典"""
-        return {
+        return sanitize_sensitive_data({
             "id": self.id,
             "name": self.name,
             "schedule": self.schedule,
@@ -295,11 +376,16 @@ class ScheduledTask:
             "workflow_steps": self.workflow_steps,
             "run_queue": self.run_queue,
             **self.extra
-        }
+        })
 
     @classmethod
     def from_dict(cls, data: dict) -> "ScheduledTask":
         """从字典创建"""
+        known_fields = {
+            "id", "name", "schedule", "trigger_type", "event_type",
+            "input_path", "output_path", "profile", "rules_profile",
+            "task_type", "enabled", "workflow_steps", "run_queue",
+        }
         return cls(
             task_id=data.get("id", ""),
             name=data.get("name", ""),
@@ -314,6 +400,7 @@ class ScheduledTask:
             enabled=data.get("enabled", True),
             workflow_steps=data.get("workflow_steps"),
             run_queue=data.get("run_queue", False),
+            **{key: value for key, value in data.items() if key not in known_fields},
         )
 
 
@@ -401,6 +488,52 @@ class SchedulerManager(Base):
             else:
                 new_schedule_rule = None
 
+            unknown = sorted(
+                key
+                for key in updates
+                if not hasattr(task, key) and key not in SCHEDULED_TASK_OVERRIDE_FIELDS
+            )
+            if unknown:
+                raise TaskContractError(
+                    f"Unknown scheduled task fields: {', '.join(unknown)}"
+                )
+            override_updates = {
+                key: updates.pop(key)
+                for key in list(updates)
+                if key in SCHEDULED_TASK_OVERRIDE_FIELDS
+            }
+            candidate = ScheduledTask(
+                task_id=task.id,
+                name=updates.get("name", task.name),
+                schedule=new_schedule,
+                input_path=updates.get("input_path", task.input_path),
+                profile=updates.get("profile", task.profile),
+                rules_profile=updates.get("rules_profile", task.rules_profile),
+                task_type=updates.get("task_type", task.task_type),
+                enabled=updates.get("enabled", task.enabled),
+                output_path=updates.get("output_path", task.output_path),
+                workflow_steps=updates.get("workflow_steps", task.workflow_steps),
+                run_queue=updates.get("run_queue", task.run_queue),
+                trigger_type=new_trigger_type,
+                event_type=updates.get("event_type", task.event_type),
+                extra={
+                    key: value
+                    for key, value in task.extra.items()
+                    if key not in SCHEDULED_TASK_OVERRIDE_FIELDS
+                },
+                **{
+                    **{
+                        key: value
+                        for key, value in task.extra.items()
+                        if key in SCHEDULED_TASK_OVERRIDE_FIELDS
+                    },
+                    **override_updates,
+                },
+            )
+            updates["task_type"] = candidate.task_type
+            updates["workflow_steps"] = candidate.workflow_steps
+            task.extra = candidate.extra
+
             for key, value in updates.items():
                 if hasattr(task, key):
                     setattr(task, key, value)
@@ -483,6 +616,9 @@ class SchedulerManager(Base):
                 "trigger_type": task.trigger_type,
                 "event_type": task.event_type,
             }
+            # Preserve all contract fields stored by older scheduler versions,
+            # including the ``lines``/``tokens`` aliases.
+            task_config.update(select_task_contract_fields(task.extra))
             task.mark_run("running")
 
             if self.execute_callback:

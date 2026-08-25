@@ -4,7 +4,7 @@ import { DataService } from '../services/DataService';
 import { nativeConfirm } from '../services/nativeDialog';
 import { useI18n } from '../contexts/I18nContext';
 import { useGlobal } from '../contexts/GlobalContext';
-import { QueueTaskItem } from '../types';
+import { QueueTaskItem, TaskType } from '../types';
 
 export const TaskQueue: React.FC = () => {
   const { t } = useI18n();
@@ -18,7 +18,7 @@ export const TaskQueue: React.FC = () => {
 
   // Task Form State
   const [taskForm, setTaskForm] = useState<Partial<QueueTaskItem>>({
-    task_type: 1000,
+    task_type: TaskType.TRANSLATE,
     input_path: '',
     output_path: '',
     profile: '',
@@ -35,7 +35,10 @@ export const TaskQueue: React.FC = () => {
     lines_limit: undefined,
     tokens_limit: undefined,
     think_depth: '',
-    thinking_budget: undefined
+    thinking_budget: undefined,
+    failover: undefined,
+    resume: false,
+    polish_mode: undefined
   });
 
   const fetchQueue = async () => {
@@ -58,7 +61,7 @@ export const TaskQueue: React.FC = () => {
   const openAddModal = () => {
     setEditIndex(null);
     setTaskForm({
-        task_type: 1000,
+        task_type: TaskType.TRANSLATE,
         input_path: '',
         output_path: '',
         profile: '',
@@ -68,7 +71,6 @@ export const TaskQueue: React.FC = () => {
         project_type: '',
         platform: '',
         api_url: '',
-        api_key: '',
         model: '',
         threads: undefined,
         retry: undefined,
@@ -78,7 +80,10 @@ export const TaskQueue: React.FC = () => {
         lines_limit: undefined,
         tokens_limit: undefined,
         think_depth: '',
-        thinking_budget: undefined
+        thinking_budget: undefined,
+        failover: undefined,
+        resume: false,
+        polish_mode: undefined
     });
     setShowModal(true);
   };
@@ -98,7 +103,6 @@ export const TaskQueue: React.FC = () => {
       project_type: taskToEdit.project_type || '',
       platform: taskToEdit.platform || '',
       api_url: taskToEdit.api_url || '',
-      api_key: taskToEdit.api_key || '',
       model: taskToEdit.model || '',
       threads: taskToEdit.threads,
       retry: taskToEdit.retry,
@@ -107,8 +111,11 @@ export const TaskQueue: React.FC = () => {
       pre_lines: taskToEdit.pre_lines,
       lines_limit: taskToEdit.lines_limit,
       tokens_limit: taskToEdit.tokens_limit,
-      think_depth: taskToEdit.think_depth || '',
-      thinking_budget: taskToEdit.thinking_budget
+      think_depth: taskToEdit.think_depth ?? '',
+      thinking_budget: taskToEdit.thinking_budget,
+      failover: taskToEdit.failover,
+      resume: taskToEdit.resume,
+      polish_mode: taskToEdit.polish_mode
     });
     setShowModal(true);
   };
@@ -118,13 +125,42 @@ export const TaskQueue: React.FC = () => {
         alert(t('msg_enter_input_path'));
         return;
     }
-    const payload = { ...taskForm };
+    const payload: Partial<QueueTaskItem> = { ...taskForm };
+    if (payload.task_type === TaskType.TRANSLATE) {
+      payload.polish_mode = null;
+    }
     if (payload.tokens_limit !== undefined && payload.tokens_limit !== null) {
       payload.tokens_limit = Math.max(400, Math.min(16000, Number(payload.tokens_limit) || 400));
-      payload.lines_limit = undefined;
+      payload.lines_limit = null;
     } else if (payload.lines_limit !== undefined && payload.lines_limit !== null) {
       payload.lines_limit = Math.max(1, Math.min(100, Number(payload.lines_limit) || 1));
-      payload.tokens_limit = undefined;
+      payload.tokens_limit = null;
+    } else if (editIndex !== null) {
+      payload.lines_limit = null;
+      payload.tokens_limit = null;
+    }
+    if (editIndex !== null) {
+      payload.output_path ||= null;
+      payload.profile ||= null;
+      payload.rules_profile ||= null;
+      payload.source_lang ||= null;
+      payload.target_lang ||= null;
+      payload.project_type ||= null;
+      payload.platform ||= null;
+      payload.api_url ||= null;
+      payload.model ||= null;
+      if (payload.think_depth === '' || payload.think_depth === undefined) {
+        payload.think_depth = null;
+      }
+      payload.threads ??= null;
+      payload.retry ??= null;
+      payload.timeout ??= null;
+      payload.rounds ??= null;
+      payload.pre_lines ??= null;
+      payload.thinking_budget ??= null;
+      if (payload.task_type !== TaskType.TRANSLATE && payload.polish_mode === undefined) {
+        payload.polish_mode = null;
+      }
     }
     try {
       if (editIndex !== null) {
@@ -247,7 +283,7 @@ export const TaskQueue: React.FC = () => {
   const showLockedTaskAlert = (task: any) => {
     let statusText = '';
     if (task.status === 'translating') {
-      if (task.task_type === 4000) {
+      if (task.task_type === TaskType.ALL_IN_ONE) {
         statusText = t('task_status_all_in_one_cn');
       } else {
         statusText = t('task_status_translating_cn');
@@ -399,10 +435,10 @@ export const TaskQueue: React.FC = () => {
                         <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1 flex-wrap">
                                 <span className={`text-[10px] px-1.5 py-0.5 rounded font-black uppercase ${
-                                    task.task_type === 4000 ? 'bg-orange-500/20 text-orange-400' :
-                                    task.task_type === 1000 ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'
+                                    task.task_type === TaskType.ALL_IN_ONE ? 'bg-orange-500/20 text-orange-400' :
+                                    task.task_type === TaskType.TRANSLATE ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'
                                 }`}>
-                                    {task.task_type === 4000 ? t('task_type_all_in_one') : task.task_type === 1000 ? t('task_type_translate') : t('task_type_polish')}
+                                    {task.task_type === TaskType.ALL_IN_ONE ? t('task_type_all_in_one') : task.task_type === TaskType.TRANSLATE ? t('task_type_translate') : t('task_type_polish')}
                                 </span>
                                 <h3 className="text-white font-bold truncate text-sm">{task.input_path}</h3>
                                 <span className={`ml-auto md:ml-0 text-[10px] font-black uppercase px-2 py-0.5 rounded ${
@@ -500,12 +536,19 @@ export const TaskQueue: React.FC = () => {
                                 <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">{t('ui_recent_type')}</label>
                                 <select 
                                     value={taskForm.task_type}
-                                    onChange={e => setTaskForm({...taskForm, task_type: parseInt(e.target.value)})}
+                                    onChange={e => {
+                                      const taskType = e.target.value as TaskType.TRANSLATE | TaskType.POLISH | TaskType.ALL_IN_ONE;
+                                      setTaskForm({
+                                        ...taskForm,
+                                        task_type: taskType,
+                                        polish_mode: taskType === TaskType.TRANSLATE ? null : taskForm.polish_mode
+                                      });
+                                    }}
                                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:ring-2 ring-primary/20 outline-none transition-all"
                                 >
-                                    <option value={1000}>{t('menu_start_translation')}</option>
-                                    <option value={2000}>{t('menu_start_polishing')}</option>
-                                    <option value={4000}>{t('menu_start_all_in_one')}</option>
+                                    <option value={TaskType.TRANSLATE}>{t('menu_start_translation')}</option>
+                                    <option value={TaskType.POLISH}>{t('menu_start_polishing')}</option>
+                                    <option value={TaskType.ALL_IN_ONE}>{t('menu_start_all_in_one')}</option>
                                 </select>
                             </div>
 
@@ -615,13 +658,9 @@ export const TaskQueue: React.FC = () => {
                                 </div>
                                 <div className="space-y-2">
                                     <label className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-2"><BookOpen size={12}/> {t('label_key_override')}</label>
-                                    <input 
-                                        type="password"
-                                        placeholder={t('tip_follow_profile')}
-                                        value={taskForm.api_key || ''}
-                                        onChange={e => setTaskForm({...taskForm, api_key: e.target.value})}
-                                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-xs text-white outline-none"
-                                    />
+                                    <p className="rounded-lg border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-400">
+                                        {t('queue_api_key_storage_notice')}
+                                    </p>
                                 </div>
                                 <div className="space-y-2">
                                     <label className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-2"><Cpu size={12}/> {t('label_model_override')}</label>
@@ -726,18 +765,53 @@ export const TaskQueue: React.FC = () => {
                                 </div>
                                 <div className="space-y-2">
                                     <label className="text-[10px] font-bold text-slate-500 uppercase">{t('label_think_depth')}</label>
-                                    <select
-                                        value={taskForm.think_depth || ''}
+                                    <input
+                                        type="text"
+                                        list="queue-think-depth-options"
+                                        placeholder={t('tip_follow_profile')}
+                                        value={taskForm.think_depth ?? ''}
                                         onChange={e => setTaskForm({...taskForm, think_depth: e.target.value})}
                                         className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-xs text-white outline-none"
+                                    />
+                                    <datalist id="queue-think-depth-options">
+                                        <option value="minimal" />
+                                        <option value="low" />
+                                        <option value="medium" />
+                                        <option value="high" />
+                                        <option value="xhigh" />
+                                        <option value="max" />
+                                    </datalist>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase">{t('setting_polishing_mode_selection')}</label>
+                                    <select
+                                        value={taskForm.polish_mode || ''}
+                                        onChange={e => setTaskForm({...taskForm, polish_mode: (e.target.value || undefined) as QueueTaskItem['polish_mode']})}
+                                        disabled={taskForm.task_type === TaskType.TRANSLATE}
+                                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-xs text-white outline-none disabled:opacity-40"
                                     >
                                         <option value="">{t('tip_follow_profile')}</option>
-                                        <option value="low">Low</option>
-                                        <option value="medium">Medium</option>
-                                        <option value="high">High</option>
-                                        <option value="xhigh">XHigh</option>
-                                        <option value="max">Max</option>
+                                        <option value="translated_text_polish">{t('choice_translated_text_polish')}</option>
+                                        <option value="source_text_polish">{t('choice_source_text_polish')}</option>
                                     </select>
+                                </div>
+                                <div className="flex flex-wrap gap-4">
+                                    <label className="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase">
+                                        <input
+                                            type="checkbox"
+                                            checked={!!taskForm.resume}
+                                            onChange={e => setTaskForm({...taskForm, resume: e.target.checked})}
+                                        />
+                                        Resume
+                                    </label>
+                                    <label className="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase">
+                                        <input
+                                            type="checkbox"
+                                            checked={taskForm.failover === true}
+                                            onChange={e => setTaskForm({...taskForm, failover: e.target.checked})}
+                                        />
+                                        Failover override
+                                    </label>
                                 </div>
                             </div>
                         </div>

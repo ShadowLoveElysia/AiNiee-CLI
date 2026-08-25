@@ -624,7 +624,7 @@ def _build_example_body(path: str) -> Any:
         return {"profile": "default"}
     if path == "/api/queue":
         return {
-            "task_type": 1,
+            "task_type": "translate",
             "input_path": "/abs/path/input.txt",
             "output_path": "/abs/path/output",
             "platform": "openai",

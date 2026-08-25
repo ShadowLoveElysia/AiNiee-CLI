@@ -35,32 +35,35 @@ export enum TaskType {
 }
 
 export interface QueueTaskItem {
-  task_type: number;
+  task_type: TaskType.TRANSLATE | TaskType.POLISH | TaskType.ALL_IN_ONE | 'invalid';
   input_path: string;
-  output_path?: string;
-  profile?: string;
-  rules_profile?: string;
-  source_lang?: string;
-  target_lang?: string;
-  project_type?: string;
+  output_path?: string | null;
+  profile?: string | null;
+  rules_profile?: string | null;
+  source_lang?: string | null;
+  target_lang?: string | null;
+  project_type?: string | null;
 
   // API Overrides
-  platform?: string;
-  api_url?: string;
-  api_key?: string;
+  platform?: string | null;
+  api_url?: string | null;
+  api_key?: string | null;
   api_key_configured?: boolean;
-  model?: string;
+  model?: string | null;
 
   // Performance Overrides
-  threads?: number;
-  retry?: number;
-  timeout?: number;
-  rounds?: number;
-  pre_lines?: number;
-  lines_limit?: number;
-  tokens_limit?: number;
-  think_depth?: string;
-  thinking_budget?: number;
+  threads?: number | null;
+  retry?: number | null;
+  timeout?: number | null;
+  rounds?: number | null;
+  pre_lines?: number | null;
+  lines_limit?: number | null;
+  tokens_limit?: number | null;
+  think_depth?: string | number | null;
+  thinking_budget?: number | null;
+  failover?: boolean | null;
+  resume?: boolean;
+  polish_mode?: 'translated_text_polish' | 'source_text_polish' | null;
 
   status: string;
 
@@ -72,22 +75,25 @@ export interface QueueTaskItem {
   is_processing?: boolean;
   process_start_time?: string;
   last_activity_time?: string;
+  task_contract_error?: string;
 }
 
 export type ThemeType = 'default' | 'elysia' | 'eden' | 'mobius' | 'pardofelis' | 'griseo' | 'kevin' | 'kalpas' | 'aponia' | 'villv' | 'su' | 'sakura' | 'kosma' | 'hua' | 'herrscher_of_human';
 
 // Payload structure to match ainiee_cli.py arguments
 export interface TaskPayload {
-  task: TaskType;
-  input_path: string;
+  task?: TaskType | number;
+  task_type?: TaskType | number;
+  run_all_in_one?: boolean;
+  input_path?: string;
   output_path?: string;
   project_type?: string;
   resume?: boolean;
   profile?: string;
   rules_profile?: string; // New field
   queue_file?: string;
-  run_all_in_one?: boolean;
   manga?: boolean;
+  polish_mode?: 'translated_text_polish' | 'source_text_polish';
   
   // Overrides
   source_lang?: string;
@@ -105,6 +111,7 @@ export interface TaskPayload {
   api_key?: string;
   failover?: boolean;
   think_depth?: string | number;
+  thinking_budget?: number;
   
   // Segmentation
   lines?: number;
@@ -335,6 +342,8 @@ export interface AppConfig {
   target_platform: string;
   base_url: string;
   model: string;
+  think_depth?: string | number;
+  thinking_budget?: number;
   api_settings: ApiSettings;
 
   // --- Prompts ---

@@ -1,32 +1,29 @@
 from __future__ import annotations
 
 import os
+import shlex
+import subprocess
+import sys
 from typing import Any, Dict
 
-from ModuleFolders.Infrastructure.TaskConfig.TaskType import TaskType
+from ModuleFolders.Infrastructure.TaskContract import (
+    TaskContractError,
+    normalize_task_name,
+)
 from ModuleFolders.Service.TaskQueue.QueueManager import QueueManager, QueueTaskItem
 from Tools.Skills.skill_base import Skill, SkillMeta, SkillParameter, SkillResult
-from Tools.Skills.skills.common import QUEUE_SECURITY_PATH, sanitize_payload
+from Tools.Skills.skills.common import (
+    QUEUE_SECURITY_PATH,
+    sanitize_payload,
+    task_skill_parameters,
+    task_spec_from_skill_args,
+    task_subprocess_invocation,
+)
 
 
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..")
 )
-
-
-_TASK_TYPE_BY_NAME = {
-    "translate": TaskType.TRANSLATION,
-    "translation": TaskType.TRANSLATION,
-    "polish": TaskType.POLISH,
-    "polishing": TaskType.POLISH,
-    "all_in_one": TaskType.TRANSLATE_AND_POLISH,
-    "translate_and_polish": TaskType.TRANSLATE_AND_POLISH,
-}
-_TASK_TYPE_LABELS = {
-    TaskType.TRANSLATION: "translate",
-    TaskType.POLISH: "polish",
-    TaskType.TRANSLATE_AND_POLISH: "all_in_one",
-}
 
 
 def _queue_manager() -> QueueManager:
@@ -35,20 +32,17 @@ def _queue_manager() -> QueueManager:
     return manager
 
 
-def _parse_task_type(value: Any) -> int:
-    if isinstance(value, int):
-        if value in _TASK_TYPE_LABELS:
-            return value
-        raise ValueError(f"Unsupported task_type: {value}")
-    normalized = str(value or "translate").strip().lower()
-    try:
-        return _TASK_TYPE_BY_NAME[normalized]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported task_type: {value}") from exc
+def _queue_manager_for(path: Any = None) -> QueueManager:
+    manager = QueueManager()
+    manager.load_tasks(str(path)) if path else manager.load_tasks(manager.default_queue_file)
+    return manager
 
 
 def _task_type_label(value: Any) -> str:
-    return _TASK_TYPE_LABELS.get(value, str(value))
+    try:
+        return normalize_task_name(value)
+    except TaskContractError:
+        return str(value)
 
 
 def _task_to_public_dict(index: int, task: QueueTaskItem) -> Dict[str, Any]:
@@ -86,28 +80,17 @@ class QueueSkill(Skill):
                     type="string",
                     required=False,
                 ),
-                SkillParameter(
-                    name="input_path",
-                    description="Input file path for new queue item.",
-                    type="string",
-                    required=False,
-                ),
-                SkillParameter(
-                    name="output_path",
-                    description="Output path for new queue item.",
-                    type="string",
-                    required=False,
-                ),
-                SkillParameter(
-                    name="profile",
-                    description="Profile name for queue item.",
-                    type="string",
-                    required=False,
-                ),
+                *task_skill_parameters(),
                 SkillParameter(
                     name="index",
                     description="Index of the queue item to remove.",
                     type="integer",
+                    required=False,
+                ),
+                SkillParameter(
+                    name="queue_file",
+                    description="Optional queue JSON path used by all queue actions.",
+                    type="string",
                     required=False,
                 ),
             ],
@@ -128,7 +111,13 @@ class QueueSkill(Skill):
         action = (args.get("action") or "").strip().lower()
 
         if action == "list":
-            manager = _queue_manager()
+            unexpected = sorted(set(args) - {"action", "queue_file"})
+            if unexpected:
+                return SkillResult.fail(
+                    f"Unknown queue list fields: {', '.join(unexpected)}",
+                    "INVALID_TASK",
+                )
+            manager = _queue_manager_for(args.get("queue_file"))
             return SkillResult.ok({
                 "queue_file": manager.queue_file,
                 "count": len(manager.tasks),
@@ -139,40 +128,21 @@ class QueueSkill(Skill):
             })
 
         if action == "add":
-            input_path = args.get("input_path")
-            if not input_path:
-                return SkillResult.fail(
-                    "input_path is required for queue items.", "MISSING_PARAM"
-                )
             try:
-                task_type = _parse_task_type(args.get("task_type"))
-            except ValueError as e:
-                return SkillResult.fail(str(e), "INVALID_TASK_TYPE")
+                payload = dict(args)
+                queue_file = payload.pop("queue_file", None)
+                spec = task_spec_from_skill_args(payload)
+                if spec.api_key:
+                    return SkillResult.fail(
+                        "api_key cannot be stored in a queue file. Use a profile or run the task directly.",
+                        "INVALID_TASK",
+                    )
+                task_fields = spec.to_queue_fields()
+            except TaskContractError as e:
+                return SkillResult.fail(str(e), "INVALID_TASK")
 
-            manager = _queue_manager()
-            item = QueueTaskItem(
-                task_type=task_type,
-                input_path=input_path,
-                output_path=args.get("output_path"),
-                profile=args.get("profile"),
-                rules_profile=args.get("rules_profile"),
-                source_lang=args.get("source_lang"),
-                target_lang=args.get("target_lang"),
-                project_type=args.get("project_type"),
-                platform=args.get("platform"),
-                api_url=args.get("api_url"),
-                api_key=args.get("api_key"),
-                model=args.get("model"),
-                threads=args.get("threads"),
-                retry=args.get("retry"),
-                timeout=args.get("timeout"),
-                rounds=args.get("rounds"),
-                pre_lines=args.get("pre_lines"),
-                lines_limit=args.get("lines_limit"),
-                tokens_limit=args.get("tokens_limit"),
-                think_depth=args.get("think_depth"),
-                thinking_budget=args.get("thinking_budget"),
-            )
+            manager = _queue_manager_for(queue_file)
+            item = QueueTaskItem(**task_fields)
             try:
                 manager.add_task(item)
             except Exception as e:
@@ -188,6 +158,12 @@ class QueueSkill(Skill):
             })
 
         if action == "remove":
+            unexpected = sorted(set(args) - {"action", "index", "queue_file"})
+            if unexpected:
+                return SkillResult.fail(
+                    f"Unknown queue remove fields: {', '.join(unexpected)}",
+                    "INVALID_TASK",
+                )
             if args.get("index") is None:
                 return SkillResult.fail("index is required for remove.", "MISSING_PARAM")
             try:
@@ -195,7 +171,7 @@ class QueueSkill(Skill):
             except ValueError as e:
                 return SkillResult.fail(str(e), "INVALID_INDEX")
 
-            manager = _queue_manager()
+            manager = _queue_manager_for(args.get("queue_file"))
             if index < 0 or index >= len(manager.tasks):
                 return SkillResult.fail(
                     f"Index {index} out of range (0-{len(manager.tasks) - 1}).", "INVALID_INDEX"
@@ -214,7 +190,13 @@ class QueueSkill(Skill):
             return SkillResult.fail("Failed to write queue file.", "WRITE_ERROR")
 
         if action == "clear":
-            manager = _queue_manager()
+            unexpected = sorted(set(args) - {"action", "queue_file"})
+            if unexpected:
+                return SkillResult.fail(
+                    f"Unknown queue clear fields: {', '.join(unexpected)}",
+                    "INVALID_TASK",
+                )
+            manager = _queue_manager_for(args.get("queue_file"))
             locked = [
                 index
                 for index, _task in enumerate(manager.tasks)
@@ -232,9 +214,48 @@ class QueueSkill(Skill):
                 return SkillResult.fail(f"Failed to clear queue: {e}", "WRITE_ERROR")
 
         if action == "run":
-            return SkillResult.ok({
-                "note": "Queue execution is available via CLI.",
-                "command": f"{os.path.join(PROJECT_ROOT, 'ainiee_cli.py')} queue --yes",
-            })
+            unexpected = sorted(set(args) - {"action", "queue_file"})
+            if unexpected:
+                return SkillResult.fail(
+                    f"Unknown queue run fields: {', '.join(unexpected)}",
+                    "INVALID_TASK",
+                )
+            try:
+                spec = task_spec_from_skill_args(
+                    {
+                        "task_type": "queue",
+                        "queue_file": args.get("queue_file"),
+                    }
+                )
+                cli_args, env = task_subprocess_invocation(spec)
+                command = [sys.executable, *cli_args]
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=3600,
+                    cwd=PROJECT_ROOT,
+                    env=env,
+                )
+            except TaskContractError as exc:
+                return SkillResult.fail(str(exc), "INVALID_TASK")
+            except subprocess.TimeoutExpired:
+                return SkillResult.fail("Queue execution timed out.", "TIMEOUT")
+            except OSError as exc:
+                return SkillResult.fail(f"Failed to start queue: {exc}", "RUNTIME_ERROR")
+
+            data = {
+                "exit_code": result.returncode,
+                "stdout": result.stdout[-2000:] if result.stdout else "",
+                "stderr": result.stderr[-2000:] if result.stderr else "",
+                "command": shlex.join(command),
+            }
+            if result.returncode != 0:
+                return SkillResult.fail(
+                    f"Queue subprocess failed with exit code {result.returncode}.",
+                    "SUBPROCESS_FAILED",
+                    data=data,
+                )
+            return SkillResult.ok(data)
 
         return SkillResult.fail(f"Unknown queue action: {action}", "INVALID_ACTION")

@@ -23,20 +23,58 @@ from ModuleFolders.Infrastructure.TaskConfig.ConfigProfileService import (
     sanitize_profile_name,
 )
 from ModuleFolders.Infrastructure.TaskConfig.TaskType import TaskType
+from ModuleFolders.Infrastructure.TaskContract import (
+    QUEUE_TASK_TYPES,
+    TASK_CONTRACT_INPUT_FIELDS,
+    TaskContractError,
+    TaskSpec,
+    select_task_contract_fields,
+    task_type_to_queue_code,
+)
 from ModuleFolders.Infrastructure.Automation.AutomationPaths import automation_glossary_dir_for
 
 
 console = Console()
 
 
-TASK_TYPE_ALIASES = {
-    "translate": TaskType.TRANSLATION,
-    "translation": TaskType.TRANSLATION,
-    "polish": TaskType.POLISH,
-    "polishing": TaskType.POLISH,
-    "all_in_one": TaskType.TRANSLATE_AND_POLISH,
-    "translate_and_polish": TaskType.TRANSLATE_AND_POLISH,
-}
+AUTOMATION_TASK_METADATA_FIELDS = frozenset(
+    {
+        "auto_start",
+        "automation_progress_file",
+        "automation_run_id",
+        "automation_worker_pid",
+        "defer_auto_start",
+        "event_type",
+        "extra",
+        "folder_batch_id",
+        "folder_batch_index",
+        "folder_batch_total",
+        "is_processing",
+        "last_activity_time",
+        "locked",
+        "process_start_time",
+        "resume_explicit",
+        "rule_id",
+        "run_queue",
+        "series_batch_volumes",
+        "series_container_path",
+        "series_incremental",
+        "series_initial_volume",
+        "series_key",
+        "series_missing_volumes",
+        "series_volume",
+        "source",
+        "status",
+        "task_id",
+        "task_name",
+        "trigger_detected_at",
+        "trigger_file_name",
+        "trigger_file_path",
+        "trigger_type",
+        "workflow_description",
+        "workflow_steps",
+    }
+)
 
 
 WORKFLOW_STEP_LABELS = {
@@ -49,16 +87,48 @@ WORKFLOW_STEP_LABELS = {
 }
 
 
+_WORKFLOW_TASK_FIELDS = frozenset(TASK_CONTRACT_INPUT_FIELDS) | {
+    "type",
+    "output_root",
+    "output_mode",
+}
+_WORKFLOW_GLOSSARY_FIELDS = frozenset(
+    {
+        "type",
+        "analysis_percent",
+        "analysis_lines",
+        "analysis_mode",
+        "prompt_file",
+        "translate_during_analysis",
+        "new",
+        "replace",
+        "min_frequency",
+        "save_mode",
+        "series_incremental",
+        "source_volume",
+        "source_label",
+    }
+)
+_WORKFLOW_STEP_FIELDS = {
+    "translate": _WORKFLOW_TASK_FIELDS,
+    "polish": _WORKFLOW_TASK_FIELDS,
+    "all_in_one": _WORKFLOW_TASK_FIELDS,
+    "queue": _WORKFLOW_TASK_FIELDS,
+    "run_queue": frozenset({"type"}),
+    "extract_glossary": _WORKFLOW_GLOSSARY_FIELDS,
+}
+
+
 class AutomationPartialCompletion(RuntimeError):
     def __init__(self, message: str = "Automation task completed partially"):
         super().__init__(message)
 
 
 def normalize_task_type(value: Any) -> int:
-    if value in (TaskType.TRANSLATION, TaskType.POLISH, TaskType.TRANSLATE_AND_POLISH):
-        return value
-    text = str(value or "").strip().lower()
-    return TASK_TYPE_ALIASES.get(text, TaskType.TRANSLATION)
+    try:
+        return task_type_to_queue_code(value or "translate")
+    except TaskContractError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def task_type_to_step_type(value: Any) -> str:
@@ -84,10 +154,10 @@ def normalize_workflow_steps(
     normalized_steps: List[dict] = []
     for step in steps or []:
         if not isinstance(step, dict):
-            continue
+            raise TaskContractError("Workflow step must be an object")
         step_type = str(step.get("type") or "").strip().lower()
         if not step_type:
-            continue
+            raise TaskContractError("Workflow step type is required")
         if step_type in {"translation", "translate"}:
             step_type = "translate"
         elif step_type in {"polishing", "polish"}:
@@ -101,10 +171,15 @@ def normalize_workflow_steps(
         elif step_type in {"start_queue", "run_queue"}:
             step_type = "run_queue"
         else:
-            continue
+            raise TaskContractError(f"Unsupported workflow step type: {step_type!r}")
 
         prepared = dict(step)
         prepared["type"] = step_type
+        unknown = sorted(set(prepared) - _WORKFLOW_STEP_FIELDS[step_type])
+        if unknown:
+            raise TaskContractError(
+                f"Unknown fields for workflow step {step_type!r}: {', '.join(unknown)}"
+            )
         if step_type == "queue":
             prepared["task_type"] = task_type_to_step_type(prepared.get("task_type", task_type))
         normalized_steps.append(prepared)
@@ -150,6 +225,7 @@ class WorkflowRunner:
         self.progress_reporter = progress_reporter
 
     def run(self, task_config: dict) -> bool:
+        task_config = self._normalize_task_config(task_config)
         input_path = task_config.get("input_path") or ""
         steps = normalize_workflow_steps(
             task_config.get("workflow_steps"),
@@ -162,6 +238,9 @@ class WorkflowRunner:
         original_rules_profile = getattr(self.host, "active_rules_profile_name", "default")
         original_root_config = copy.deepcopy(getattr(self.host, "root_config", {}))
         original_config = copy.deepcopy(getattr(self.host, "config", {}))
+        original_runtime_overrides = copy.deepcopy(
+            getattr(self.host, "runtime_config_overrides", {})
+        )
         workflow_context: Dict[str, Any] = {}
 
         try:
@@ -176,9 +255,21 @@ class WorkflowRunner:
                 if step_type == "extract_glossary":
                     self._run_glossary_step(input_path, step, task_config, workflow_context)
                 elif step_type == "translate":
-                    self._run_task_step(TaskType.TRANSLATION, input_path, step, task_config)
+                    self._run_task_step(
+                        TaskType.TRANSLATION,
+                        input_path,
+                        step,
+                        task_config,
+                        resume=step.get("resume", task_config.get("resume", False)),
+                    )
                 elif step_type == "polish":
-                    self._run_task_step(TaskType.POLISH, input_path, step, task_config, resume=bool(step.get("resume", True)))
+                    self._run_task_step(
+                        TaskType.POLISH,
+                        input_path,
+                        step,
+                        task_config,
+                        resume=step.get("resume", task_config.get("resume", True)),
+                    )
                 elif step_type == "all_in_one":
                     self._run_all_in_one_step(input_path, step, task_config)
                 elif step_type == "queue":
@@ -194,6 +285,34 @@ class WorkflowRunner:
             self.host.active_rules_profile_name = original_rules_profile
             self.host.root_config = original_root_config
             self.host.config = original_config
+            self.host.runtime_config_overrides = original_runtime_overrides
+
+    @staticmethod
+    def _normalize_task_config(task_config: dict) -> dict:
+        """对自动化执行字段做统一校验，保留工作流运行元数据。"""
+        if not isinstance(task_config, dict):
+            raise TaskContractError("Automation task config must be a mapping")
+        unknown = sorted(
+            set(task_config) - TASK_CONTRACT_INPUT_FIELDS - AUTOMATION_TASK_METADATA_FIELDS
+        )
+        if unknown:
+            raise TaskContractError(f"Unknown automation task fields: {', '.join(unknown)}")
+        payload = select_task_contract_fields(task_config)
+        resume_was_provided = payload.get("resume") is not None
+        if "task_type" not in payload and "task" not in payload:
+            payload["task_type"] = "translation"
+        payload.setdefault("input_path", task_config.get("input_path", ""))
+        spec = TaskSpec.from_mapping(payload)
+        if spec.task_type not in QUEUE_TASK_TYPES or spec.manga:
+            raise TaskContractError(
+                f"Task type {spec.task_type!r} is not supported by automation workflows"
+            )
+        normalized = dict(task_config)
+        normalized.update(spec.to_mapping(include_none=True, include_api_key=True))
+        normalized["task_type"] = spec.task_type
+        if not resume_was_provided:
+            normalized.pop("resume", None)
+        return normalized
 
     @staticmethod
     def is_enqueue_only(task_config: dict) -> bool:
@@ -294,6 +413,15 @@ class WorkflowRunner:
             target_platform = cfg.get("target_platform")
             if target_platform and target_platform in cfg.get("platforms", {}):
                 cfg["platforms"][target_platform]["thinking_budget"] = task_config.get("thinking_budget")
+
+        if task_config.get("failover") is not None:
+            cfg["enable_api_failover"] = bool(task_config.get("failover"))
+        if task_config.get("polish_mode"):
+            runtime_overrides = getattr(self.host, "runtime_config_overrides", {})
+            if not isinstance(runtime_overrides, dict):
+                runtime_overrides = {}
+            runtime_overrides["polishing_mode_selection"] = task_config.get("polish_mode")
+            self.host.runtime_config_overrides = runtime_overrides
 
         self._apply_dynamic_glossary_context(task_config)
 
@@ -746,31 +874,56 @@ class WorkflowRunner:
                 return True
         return False
 
-    def _run_task_step(self, task_type: int, input_path: str, step: dict, task_config: dict = None, resume: bool = False):
+    def _run_task_step(
+        self,
+        task_type: int,
+        input_path: str,
+        step: dict,
+        task_config: dict = None,
+        resume: Any = False,
+        contract_task_type: str | None = None,
+    ):
         if not input_path:
             raise ValueError("Task step requires input_path")
         if not os.path.exists(input_path):
             raise FileNotFoundError(input_path)
 
-        output_path = self._resolve_step_output_path(input_path, step)
-        previous_output_path = self.host.config.get("label_output_path", "")
-        previous_auto_output = self.host.config.get("auto_set_output_path", False)
-        if output_path:
-            self.host.config["label_output_path"] = output_path
-            self.host.config["auto_set_output_path"] = False
+        task_payload = select_task_contract_fields(task_config or {})
+        task_payload.update(select_task_contract_fields(step))
+        task_payload["task_type"] = contract_task_type or task_type_to_step_type(task_type)
+        task_payload["input_path"] = input_path
+        task_payload["resume"] = resume
+        if task_payload["task_type"] == "translate":
+            task_payload.pop("polish_mode", None)
+        step_spec = TaskSpec.from_mapping(task_payload)
+
+        previous_active_profile = getattr(self.host, "active_profile_name", None)
+        previous_rules_profile = getattr(self.host, "active_rules_profile_name", None)
+        previous_root_config = copy.deepcopy(getattr(self.host, "root_config", {}))
+        previous_config = copy.deepcopy(getattr(self.host, "config", {}))
+        previous_runtime_overrides = copy.deepcopy(
+            getattr(self.host, "runtime_config_overrides", {})
+        )
 
         try:
-            rules_profile = step.get("rules_profile")
-            if rules_profile:
+            if step_spec.profile or step_spec.rules_profile:
                 self.host.load_config(
-                    active_profile_name=getattr(self.host, "active_profile_name", None),
-                    active_rules_profile_name=rules_profile,
+                    active_profile_name=step_spec.profile or previous_active_profile,
+                    active_rules_profile_name=step_spec.rules_profile or previous_rules_profile,
                 )
-                self._apply_task_overrides(task_config or {})
+            self._apply_task_overrides(
+                step_spec.to_mapping(include_none=True, include_api_key=True)
+            )
+
+            output_path = self._resolve_step_output_path(input_path, step)
+            if output_path:
+                self.host.config["label_output_path"] = output_path
+                self.host.config["auto_set_output_path"] = False
+
             ok = self.host.run_task(
                 task_type,
                 target_path=input_path,
-                continue_status=resume,
+                continue_status=step_spec.resume,
                 non_interactive=True,
                 from_queue=True,
                 skip_preflight=True,
@@ -778,8 +931,11 @@ class WorkflowRunner:
                 automation_progress=bool(self.progress_reporter),
             )
         finally:
-            self.host.config["label_output_path"] = previous_output_path
-            self.host.config["auto_set_output_path"] = previous_auto_output
+            self.host.active_profile_name = previous_active_profile
+            self.host.active_rules_profile_name = previous_rules_profile
+            self.host.root_config = previous_root_config
+            self.host.config = previous_config
+            self.host.runtime_config_overrides = previous_runtime_overrides
 
         if not ok:
             partial_message = self._partial_message_from_reporter()
@@ -792,11 +948,28 @@ class WorkflowRunner:
             raise AutomationPartialCompletion(partial_message)
 
     def _run_all_in_one_step(self, input_path: str, step: dict, task_config: dict = None):
-        self._run_task_step(TaskType.TRANSLATION, input_path, step, task_config, resume=bool(step.get("resume", False)))
+        resume_explicit = "resume" in step or "resume" in (task_config or {})
+        translate_resume = step.get("resume", (task_config or {}).get("resume", False))
+        polish_resume = translate_resume if resume_explicit else True
+        self._run_task_step(
+            TaskType.TRANSLATION,
+            input_path,
+            step,
+            task_config,
+            resume=translate_resume,
+            contract_task_type="all_in_one",
+        )
         if Base.work_status != Base.STATUS.STOPING:
             polish_step = dict(step)
-            polish_step.setdefault("resume", True)
-            self._run_task_step(TaskType.POLISH, input_path, polish_step, task_config, resume=True)
+            polish_step["resume"] = polish_resume
+            self._run_task_step(
+                TaskType.POLISH,
+                input_path,
+                polish_step,
+                task_config,
+                resume=polish_resume,
+                contract_task_type="all_in_one",
+            )
 
     def _run_queue_add_step(self, input_path: str, task_config: dict, step: dict):
         from ModuleFolders.Service.TaskQueue.QueueManager import QueueManager, QueueTaskItem
@@ -808,13 +981,22 @@ class WorkflowRunner:
 
         queue_manager = QueueManager()
         output_path = self._resolve_step_output_path(input_path, step) or task_config.get("output_path") or None
+        task_payload = select_task_contract_fields(task_config)
+        task_payload.update(select_task_contract_fields(step))
+        task_payload.update(
+            {
+                "task_type": step.get("task_type", task_config.get("task_type", "translation")),
+                "input_path": input_path,
+                "output_path": output_path,
+                "rules_profile": step.get("rules_profile") or task_config.get("rules_profile") or None,
+            }
+        )
+        spec = TaskSpec.from_mapping(task_payload)
+        queue_fields = spec.to_queue_fields()
         queue_manager.add_task(
             QueueTaskItem(
-                normalize_task_type(step.get("task_type", task_config.get("task_type", "translation"))),
-                input_path,
-                output_path=output_path,
-                profile=task_config.get("profile") or None,
-                rules_profile=step.get("rules_profile") or task_config.get("rules_profile") or None,
+                **queue_fields,
+                resume_explicit="resume" in task_payload,
                 source=task_config.get("source"),
                 rule_id=task_config.get("rule_id"),
                 trigger_file_path=task_config.get("trigger_file_path"),

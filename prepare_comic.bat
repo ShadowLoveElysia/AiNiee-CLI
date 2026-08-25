@@ -129,13 +129,11 @@ if /I "%BACKEND%"=="gpu" (
     uv pip install --python "%MAIN_PYTHON%" --default-index https://pypi.org/simple --reinstall ^
         https://download.pytorch.org/whl/cu128/torch/torch-2.8.0%%2Bcu128-cp312-cp312-win_amd64.whl ^
         https://download.pytorch.org/whl/cu128/torchvision/torchvision-0.23.0%%2Bcu128-cp312-cp312-win_amd64.whl ^
-        https://download.pytorch.org/whl/cu128/torchaudio/torchaudio-2.8.0%%2Bcu128-cp312-cp312-win_amd64.whl ^
-        onnxruntime-gpu==1.20.1
+        onnxruntime-gpu==1.20.2
 ) else if /I "%BACKEND%"=="cpu" (
     uv pip install --python "%MAIN_PYTHON%" --default-index https://pypi.org/simple --reinstall ^
         https://download.pytorch.org/whl/cpu/torch/torch-2.8.0%%2Bcpu-cp312-cp312-win_amd64.whl ^
         https://download.pytorch.org/whl/cpu/torchvision/torchvision-0.23.0%%2Bcpu-cp312-cp312-win_amd64.whl ^
-        https://download.pytorch.org/whl/cpu/torchaudio/torchaudio-2.8.0%%2Bcpu-cp312-cp312-win_amd64.whl ^
         onnxruntime==1.20.1
 ) else (
     uv pip install --python "%MAIN_PYTHON%" -r "%REQUIREMENTS_FILE%"

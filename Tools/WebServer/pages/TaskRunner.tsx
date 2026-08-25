@@ -32,6 +32,9 @@ export const TaskRunner: React.FC = () => {
   const { config, taskState, setTaskState } = useGlobal(); // Use persistent global state
   
   const intervalRef = useRef<any>(null);
+  const taskGenerationRef = useRef(0);
+  const pollInFlightRef = useRef(false);
+  const startInFlightRef = useRef(false);
   const cursorRef = useRef({ logs: 0, chart: 0, comparison: 0 });
   const [comparisonChannelStatus, setComparisonChannelStatus] = useState<'idle' | 'waiting' | 'active' | 'stale'>('idle');
   const [comparisonLagSec, setComparisonLagSec] = useState<number | null>(null);
@@ -41,6 +44,8 @@ export const TaskRunner: React.FC = () => {
   const [showTempFileList, setShowTempFileList] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [showUploadArea, setShowUploadArea] = useState(false);
+  const [previewTaskOverride, setPreviewTaskOverride] = useState<TaskType | null>(null);
+  const [isStarting, setIsStarting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mangaMode = !!taskState.isMangaMode;
   const mangaProjectPath = resolveMangaProjectPath(config?.label_output_path, taskState.customInputPath);
@@ -60,6 +65,7 @@ export const TaskRunner: React.FC = () => {
   };
 
   const setTaskType = (type: TaskType) => {
+      setPreviewTaskOverride(null);
       setTaskState(prev => ({ ...prev, taskType: type }));
   };
 
@@ -102,6 +108,8 @@ export const TaskRunner: React.FC = () => {
   // --- Event Handlers ---
 
   const processUpload = async (file: File) => {
+      if (startInFlightRef.current || taskState.isRunning) return;
+      const uploadGeneration = taskGenerationRef.current;
       setIsUploading(true);
       try {
           // Attempt 1: Default Policy
@@ -149,8 +157,18 @@ export const TaskRunner: React.FC = () => {
           }
 
           if (result.path) {
+              if (
+                  uploadGeneration !== taskGenerationRef.current ||
+                  startInFlightRef.current ||
+                  taskState.isRunning
+              ) return;
               addLog(`[SYSTEM] File uploaded: ${result.path}`, "system");
               await loadTempFiles();
+              if (
+                  uploadGeneration !== taskGenerationRef.current ||
+                  startInFlightRef.current ||
+                  taskState.isRunning
+              ) return;
               setCustomInputPath(result.path);
               setShowUploadArea(false);
           }
@@ -182,9 +200,11 @@ export const TaskRunner: React.FC = () => {
       }
   };
 
-  const startPolling = () => {
+  const startPolling = (generation = taskGenerationRef.current) => {
       stopPolling();
       intervalRef.current = setInterval(async () => {
+          if (pollInFlightRef.current || generation !== taskGenerationRef.current) return;
+          pollInFlightRef.current = true;
           try {
               const requestedCursor = { ...cursorRef.current };
               const data = await DataService.getTaskStatus(
@@ -192,6 +212,7 @@ export const TaskRunner: React.FC = () => {
                   requestedCursor.chart,
                   requestedCursor.comparison
               );
+              if (generation !== taskGenerationRef.current) return;
               const nextCursor = data.cursors || requestedCursor;
               cursorRef.current = {
                   logs: nextCursor.logs ?? requestedCursor.logs,
@@ -206,6 +227,9 @@ export const TaskRunner: React.FC = () => {
               );
               setComparisonChannelStatus(comparisonStatus.status);
               setComparisonLagSec(comparisonStatus.lagSec);
+              if (['completed', 'error', 'idle'].includes(data.stats?.status)) {
+                  setPreviewTaskOverride(null);
+              }
               
               setTaskState(prev => {
                   try {
@@ -247,15 +271,21 @@ export const TaskRunner: React.FC = () => {
 
           } catch (e) {
               console.error("Polling error", e);
+          } finally {
+              pollInFlightRef.current = false;
           }
       }, 1000);
   };
 
   const stopPolling = () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+      }
   };
 
   const handleStart = async (isAllInOne = false) => {
+      if (startInFlightRef.current) return;
       if (!config || !config.target_platform) {
           addLog("[ERROR] Configuration not fully loaded or platform not selected.", "error");
           return;
@@ -271,8 +301,16 @@ export const TaskRunner: React.FC = () => {
       const apiKey = platformConfig?.api_key || (config as any).api_key || undefined;
 
       // Prepare payload with explicit values (transmitting parameters correctly)
+      const taskType = isAllInOne ? TaskType.ALL_IN_ONE : (taskState.taskType || TaskType.TRANSLATE);
+      const taskGeneration = taskGenerationRef.current + 1;
+      taskGenerationRef.current = taskGeneration;
+      stopPolling();
+      startInFlightRef.current = true;
+      setIsStarting(true);
+      setShowUploadArea(false);
+      setPreviewTaskOverride(taskType);
       const payload: TaskPayload = {
-          task: taskState.taskType || TaskType.TRANSLATE,
+          task: taskType,
           input_path: taskState.customInputPath,
           output_path: config.label_output_path || undefined, 
           source_lang: config.source_language || undefined,
@@ -286,7 +324,7 @@ export const TaskRunner: React.FC = () => {
           retry: Number(config.retry_count || 0),
           timeout: Number(config.request_timeout || 60),
           rounds: Number(config.round_limit || 3),
-          pre_lines: Number(config.pre_line_counts || 3),
+          pre_lines: Number(config.pre_line_counts ?? 3),
           
           platform: targetPlatform,
           model: config.model || platformConfig?.model || '',
@@ -294,12 +332,16 @@ export const TaskRunner: React.FC = () => {
           api_url: config.base_url || platformConfig?.api_url || undefined,
           
           failover: !!config.enable_api_failover,
+          think_depth: config.think_depth ?? platformConfig?.think_depth ?? undefined,
+          thinking_budget: config.thinking_budget ?? platformConfig?.thinking_budget ?? undefined,
+          polish_mode: taskType === TaskType.POLISH || taskType === TaskType.ALL_IN_ONE
+              ? (config.polishing_mode_selection as TaskPayload['polish_mode']) || undefined
+              : undefined,
           
           lines: !config.tokens_limit_switch ? Math.max(1, Math.min(100, Number(config.lines_limit || 20))) : undefined,
           tokens: config.tokens_limit_switch ? Math.max(400, Math.min(16000, Number(config.tokens_limit || 1500))) : undefined,
           
-          run_all_in_one: isAllInOne,
-          manga: mangaMode
+          manga: taskType === TaskType.TRANSLATE && mangaMode
       };
 
       // Reset Chart but keep input path
@@ -318,12 +360,19 @@ export const TaskRunner: React.FC = () => {
           }
       }));
       
-      addLog(`[SYSTEM] Starting ${isAllInOne ? 'ALL-IN-ONE' : payload.task.toUpperCase()} task...`, "system");
+      addLog(`[SYSTEM] Starting ${isAllInOne ? 'ALL-IN-ONE' : String(payload.task).toUpperCase()} task...`, "system");
 
       try {
           await DataService.startTask(payload);
-          startPolling();
+          if (taskGeneration !== taskGenerationRef.current) return;
+          startInFlightRef.current = false;
+          setIsStarting(false);
+          startPolling(taskGeneration);
       } catch (e: any) {
+          if (taskGeneration !== taskGenerationRef.current) return;
+          startInFlightRef.current = false;
+          setIsStarting(false);
+          setPreviewTaskOverride(null);
           setTaskState(prev => ({ ...prev, isRunning: false, stats: { ...prev.stats, status: 'error' } }));
           addLog(`[ERROR] Failed to start: ${e.message}`, "error");
       }
@@ -333,7 +382,16 @@ export const TaskRunner: React.FC = () => {
       addLog("[SYSTEM] Sending STOP signal...", "warning");
       try {
           await DataService.stopTask();
-          // We wait for polling to pick up the status change
+          taskGenerationRef.current += 1;
+          stopPolling();
+          startInFlightRef.current = false;
+          setIsStarting(false);
+          setPreviewTaskOverride(null);
+          setTaskState(prev => ({
+              ...prev,
+              isRunning: false,
+              stats: { ...prev.stats, status: 'idle' }
+          }));
       } catch (e: any) {
           addLog(`[ERROR] Failed to stop: ${e.message}`, "error");
       }
@@ -341,7 +399,12 @@ export const TaskRunner: React.FC = () => {
 
   const generateCLIPreview = () => {
       if (!config) return "Loading config...";
-      const parts = ['uv run ainiee_cli.py', taskState.taskType || 'translate', `"${taskState.customInputPath || ''}"`];
+      const previewTask = previewTaskOverride || taskState.taskType || TaskType.TRANSLATE;
+      const platformConfig = config.target_platform ? config.platforms?.[config.target_platform] : undefined;
+      const polishMode = config.polishing_mode_selection;
+      const thinkDepth = config.think_depth ?? platformConfig?.think_depth;
+      const thinkingBudget = config.thinking_budget ?? platformConfig?.thinking_budget;
+      const parts = ['uv run ainiee_cli.py', previewTask, `"${taskState.customInputPath || ''}"`];
       
       // Flags
       if (taskState.isResuming) parts.push('-y --resume');
@@ -350,12 +413,38 @@ export const TaskRunner: React.FC = () => {
       // Add Profile (Critical)
       if (config.active_profile) parts.push(`--profile "${config.active_profile}"`);
       if (config.active_rules_profile) parts.push(`--rules-profile "${config.active_rules_profile}"`);
-      if (mangaMode) parts.push('--manga');
+      if (config.label_output_path) parts.push(`--output "${config.label_output_path}"`);
+      if (mangaMode && previewTask === TaskType.TRANSLATE) parts.push('--manga');
 
       if (config.source_language) parts.push(`-s "${config.source_language}"`);
       if (config.target_language) parts.push(`-t "${config.target_language}"`);
-      if (config.user_thread_counts) parts.push(`--threads ${config.user_thread_counts}`);
+      if (config.translation_project) parts.push(`--type "${config.translation_project}"`);
+      if (config.user_thread_counts !== undefined) parts.push(`--threads ${Number(config.user_thread_counts || 0)}`);
+      if (config.retry_count !== undefined) parts.push(`--retry ${Number(config.retry_count || 0)}`);
+      if (config.request_timeout !== undefined) parts.push(`--timeout ${Number(config.request_timeout || 60)}`);
+      if (config.round_limit !== undefined) parts.push(`--rounds ${Number(config.round_limit || 3)}`);
+      if (config.pre_line_counts !== undefined) parts.push(`--pre-lines ${Number(config.pre_line_counts ?? 3)}`);
       if (config.target_platform) parts.push(`--platform "${config.target_platform}"`);
+      const model = config.model || platformConfig?.model;
+      if (model) parts.push(`--model "${model}"`);
+      const apiUrl = config.base_url || platformConfig?.api_url;
+      if (apiUrl) parts.push(`--api-url "${apiUrl}"`);
+      parts.push(`--failover ${config.enable_api_failover ? 'on' : 'off'}`);
+      if (thinkDepth !== undefined && thinkDepth !== null && thinkDepth !== '') {
+          parts.push(`--think-depth ${String(thinkDepth)}`);
+      }
+      if (thinkingBudget !== undefined && thinkingBudget !== null) {
+          parts.push(`--thinking-budget ${Number(thinkingBudget)}`);
+      }
+      if ((previewTask === TaskType.POLISH || previewTask === TaskType.ALL_IN_ONE) && polishMode) {
+          parts.push(`--polish-mode ${polishMode}`);
+      }
+      if (config.tokens_limit_switch) {
+          parts.push(`--tokens ${Math.max(400, Math.min(16000, Number(config.tokens_limit || 1500)))}`);
+      } else {
+          parts.push(`--lines ${Math.max(1, Math.min(100, Number(config.lines_limit || 20)))}`);
+      }
+      parts.push('--web-mode');
       return parts.join(' ');
   }
 
@@ -371,9 +460,11 @@ export const TaskRunner: React.FC = () => {
 
   // Initial sync on mount to recover state after refresh
   useEffect(() => {
+    const recoveryGeneration = taskGenerationRef.current;
     const recoverState = async () => {
         try {
             const data = await DataService.getTaskStatus(0, 0, 0);
+            if (recoveryGeneration !== taskGenerationRef.current) return;
             cursorRef.current = {
                 logs: data.cursors?.logs ?? (data.logs?.length || 0),
                 chart: data.cursors?.chart ?? (data.chart_data?.length || 0),
@@ -386,6 +477,9 @@ export const TaskRunner: React.FC = () => {
             );
             setComparisonChannelStatus(recoveredStatus.status);
             setComparisonLagSec(recoveredStatus.lagSec);
+            if (data.stats.status !== 'running') {
+                setPreviewTaskOverride(null);
+            }
             setTaskState(prev => ({
                 ...prev,
                 isRunning: data.stats.status === 'running',
@@ -396,22 +490,19 @@ export const TaskRunner: React.FC = () => {
             }));
             
             if (data.stats.status === 'running') {
-                startPolling();
+                startPolling(recoveryGeneration);
             }
         } catch (e) {
             console.error("Failed to recover state", e);
         }
     };
     recoverState();
+    return () => {
+        taskGenerationRef.current += 1;
+        startInFlightRef.current = false;
+        stopPolling();
+    };
   }, []);
-
-  // Handle polling when task is running
-  useEffect(() => {
-    if (taskState.isRunning) {
-        startPolling();
-    }
-    return () => stopPolling();
-  }, [taskState.isRunning]);
 
   // --- Render ---
 
@@ -477,6 +568,7 @@ export const TaskRunner: React.FC = () => {
                     <div className="relative">
                          <input 
                             type="text" 
+                            disabled={taskState.isRunning}
                             placeholder={t('prompt_input_path')} 
                             value={taskState.customInputPath}
                             onChange={(e) => setCustomInputPath(e.target.value)}
@@ -484,6 +576,7 @@ export const TaskRunner: React.FC = () => {
                         />
                          <div className="absolute right-0 top-0">
                             <button 
+                                disabled={taskState.isRunning}
                                 onClick={() => setShowTempFileList(!showTempFileList)}
                                 className={`text-slate-500 hover:text-white p-1 transition-transform ${showTempFileList ? 'rotate-180 text-primary' : ''}`}
                             >
@@ -521,6 +614,7 @@ export const TaskRunner: React.FC = () => {
                         <label className="flex items-center gap-2 cursor-pointer group">
                             <input 
                                 type="checkbox" 
+                                disabled={taskState.isRunning}
                                 checked={taskState.isResuming}
                                 onChange={(e) => setTaskState(prev => ({ ...prev, isResuming: e.target.checked }))}
                                 className="w-4 h-4 rounded border-slate-700 text-primary focus:ring-primary bg-slate-900"
@@ -530,12 +624,16 @@ export const TaskRunner: React.FC = () => {
                         <label className="flex items-center gap-2 cursor-pointer group">
                             <input
                                 type="checkbox"
+                                disabled={taskState.isRunning}
                                 checked={mangaMode}
-                                onChange={(e) => setTaskState(prev => ({
-                                    ...prev,
-                                    isMangaMode: e.target.checked,
-                                    taskType: e.target.checked ? TaskType.TRANSLATE : prev.taskType
-                                }))}
+                                onChange={(e) => {
+                                    setPreviewTaskOverride(null);
+                                    setTaskState(prev => ({
+                                        ...prev,
+                                        isMangaMode: e.target.checked,
+                                        taskType: e.target.checked ? TaskType.TRANSLATE : prev.taskType
+                                    }));
+                                }}
                                 className="w-4 h-4 rounded border-slate-700 text-cyan-400 focus:ring-cyan-400 bg-slate-900"
                             />
                             <span className="text-xs text-slate-400 group-hover:text-slate-200 transition-colors">Manga Mode (`--manga`)</span>
@@ -591,16 +689,20 @@ export const TaskRunner: React.FC = () => {
                 ) : (
                     <button 
                         onClick={handleStop}
+                        disabled={isStarting}
                         className="flex items-center gap-2 px-6 py-2 rounded-lg font-bold transition-all bg-red-500/10 text-red-500 border border-red-500/50 hover:bg-red-500/20 hover:shadow-lg hover:shadow-red-500/10"
                     >
-                        <Square size={18} fill="currentColor" /> {t('ui_task_stop')}
+                        {isStarting
+                            ? <Loader2 size={18} className="animate-spin" />
+                            : <Square size={18} fill="currentColor" />}
+                        {isStarting ? 'STARTING...' : t('ui_task_stop')}
                     </button>
                 )}
             </div>
         </div>
 
         {/* Upload Drag & Drop Area */}
-        {showUploadArea && (
+        {showUploadArea && !taskState.isRunning && (
             <div 
                 className={`border-2 border-dashed rounded-xl p-8 transition-all text-center cursor-pointer ${isUploading ? 'border-primary bg-primary/5' : 'border-slate-700 hover:border-slate-500 hover:bg-slate-800/30'}`}
                 onDragOver={handleDragOver}

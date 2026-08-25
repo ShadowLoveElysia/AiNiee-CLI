@@ -26,7 +26,8 @@ class MangaRuntimeMenu:
     PYTHON_TAG = "cp312-cp312"
     TORCH_VERSION = "2.8.0"
     TORCHVISION_VERSION = "0.23.0"
-    ONNXRUNTIME_VERSION = "1.20.1"
+    ONNXRUNTIME_CPU_VERSION = "1.20.1"
+    ONNXRUNTIME_GPU_VERSION = "1.20.2"
     PYTORCH_WHEEL_MIRROR = "https://mirrors.aliyun.com/pytorch-wheels"
     PYTORCH_WHEEL_OFFICIAL = "https://download.pytorch.org/whl"
     PYPI_INDEX_URL = "https://pypi.org/simple"
@@ -44,7 +45,7 @@ class MangaRuntimeMenu:
         "torch>=2.0.0",
         "torchvision>=0.15.0",
     )
-    PYPI_CPU_PACKAGES = PYPI_TORCH_PACKAGES + (f"onnxruntime=={ONNXRUNTIME_VERSION}",)
+    PYPI_CPU_PACKAGES = PYPI_TORCH_PACKAGES + (f"onnxruntime=={ONNXRUNTIME_CPU_VERSION}",)
     DEVICE_CONFIG_KEYS = (
         "manga_runtime_device",
         "manga_detect_device",
@@ -717,7 +718,7 @@ class MangaRuntimeMenu:
                     "install_args": self._torch_runtime_install_args(
                         "cu128",
                         source,
-                        f"onnxruntime-gpu=={self.ONNXRUNTIME_VERSION}",
+                        f"onnxruntime-gpu=={self.ONNXRUNTIME_GPU_VERSION}",
                     ),
                 }
                 for source in self._pytorch_source_order()
@@ -730,7 +731,7 @@ class MangaRuntimeMenu:
                     "install_args": self._torch_runtime_install_args(
                         "cpu",
                         source,
-                        f"onnxruntime=={self.ONNXRUNTIME_VERSION}",
+                        f"onnxruntime=={self.ONNXRUNTIME_CPU_VERSION}",
                     ),
                 }
                 for source in self._pytorch_source_order()

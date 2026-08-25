@@ -60,21 +60,28 @@ from ModuleFolders.Infrastructure.TaskConfig.PolishingMode import (
     normalize_polishing_mode,
     polishing_mode_i18n_key,
 )
+from ModuleFolders.Infrastructure.TaskContract import (
+    TASK_API_KEY_ENV,
+    TaskContractError,
+    normalize_task_name,
+)
 
 
 
 console = Console()
 current_lang, i18n = initialize_i18n(PROJECT_ROOT)
 SPONSOR_IDS = ("往生", "Kingxiao")
-WEB_TASK_API_KEY_ENV = "AINIEE_WEB_TASK_API_KEY"
+WEB_TASK_API_KEY_ENV = TASK_API_KEY_ENV
 
 
 def _consume_web_task_api_key(args, environ=None):
     """Apply a Web worker credential override and remove it from the environment."""
     environment = os.environ if environ is None else environ
     api_key = environment.pop(WEB_TASK_API_KEY_ENV, None)
+    args._task_api_key_ephemeral = False
     if api_key and not args.api_key:
         args.api_key = api_key
+        args._task_api_key_ephemeral = True
 
 
 class CLIMenu:
@@ -2455,7 +2462,12 @@ def main():
     parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS, help='Show this help message and exit.')
 
     # 核心任务参数
-    parser.add_argument('task', nargs='?', choices=['translate', 'manga', 'polish', 'export', 'all_in_one', 'queue', 'mcp'], help=i18n.get('help_task'))
+    parser.add_argument(
+        'task',
+        nargs='?',
+        metavar='TASK',
+        help=i18n.get('help_task'),
+    )
     parser.add_argument('input_path', nargs='?', help=i18n.get('help_input'))
 
     # 路径与环境
@@ -2544,6 +2556,19 @@ def main():
     args = parser.parse_args()
     _consume_web_task_api_key(args)
 
+    raw_task = args.task
+    raw_task_name = str(raw_task or '').strip().lower()
+    if raw_task is not None:
+        if raw_task_name == 'mcp':
+            args.task = 'mcp'
+        else:
+            try:
+                args.task = normalize_task_name(raw_task)
+            except TaskContractError as exc:
+                parser.error(str(exc))
+            if raw_task_name == 'manga':
+                args.manga = True
+
     # CLI shortcut layer: allow `ainiee --mcp` to map onto the existing `mcp`
     # task entry without duplicating any MCP runtime logic in the parser.
     mcp_shortcut_flags = [
@@ -2574,10 +2599,6 @@ def main():
         if args.task and args.task not in {'translate', 'manga'}:
             parser.error("--manga-runtime-check can only be used with translate/manga tasks.")
         args.task = args.task or 'translate'
-        args.manga = True
-
-    if args.task == 'manga':
-        args.task = 'translate'
         args.manga = True
 
     if args.mcp_stdio:
